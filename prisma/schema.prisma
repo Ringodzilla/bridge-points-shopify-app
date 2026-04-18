@@ -1,0 +1,118 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+// Note that some adapters may set a maximum length for the String type by default, please ensure your strings are long
+// enough when changing adapters.
+// See https://www.prisma.io/docs/orm/reference/prisma-schema-reference#string for more information
+datasource db {
+  provider = "sqlite"
+  url      = "file:dev.sqlite"
+}
+
+model Session {
+  id            String    @id
+  shop          String
+  state         String
+  isOnline      Boolean   @default(false)
+  scope         String?
+  expires       DateTime?
+  accessToken   String
+  userId        BigInt?
+  firstName     String?
+  lastName      String?
+  email         String?
+  accountOwner  Boolean   @default(false)
+  locale        String?
+  collaborator  Boolean?  @default(false)
+  emailVerified Boolean?  @default(false)
+  refreshToken        String?
+  refreshTokenExpires DateTime?
+}
+
+model InviteJob {
+  id                   String           @id @default(cuid())
+  shop                 String
+  name                 String
+  subject              String
+  body                 String
+  customMessage        String?
+  from                 String?
+  tagInput             String?
+  emailFilter          String           @default("present")
+  purchaseFilter       String           @default("all")
+  purchasedAfter       String?
+  segmentQuery         String?
+  previewCount         Int              @default(0)
+  previewPrecision     String           @default("NONE")
+  previewCustomersJson String?
+  nextCursor           String?
+  status               String           @default("draft")
+  queuedAt             DateTime?
+  startedAt            DateTime?
+  completedAt          DateTime?
+  lastError            String?
+  attemptedCount       Int              @default(0)
+  successCount         Int              @default(0)
+  failureCount         Int              @default(0)
+  billedCount          Int              @default(0)
+  lastBillingError     String?
+  createdAt            DateTime         @default(now())
+  updatedAt            DateTime         @updatedAt
+  deliveries           InviteDelivery[]
+
+  @@index([shop, createdAt])
+}
+
+model InviteDelivery {
+  id           String   @id @default(cuid())
+  jobId        String
+  shop         String
+  customerId   String
+  displayName  String?
+  email        String?
+  status       String   @default("queued")
+  errorMessage String?
+  processedAt  DateTime?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+  job          InviteJob @relation(fields: [jobId], references: [id], onDelete: Cascade)
+
+  @@unique([jobId, customerId])
+  @@index([jobId, status])
+}
+
+model ShopSettings {
+  shop                    String   @id
+  autoGrantEnabled        Boolean  @default(true)
+  grantRateNumerator      Int      @default(1)
+  grantRateDenominator    Int      @default(100)
+  defaultExpiryDays       Int      @default(365)
+  manualDefaultExpiryDays Int      @default(365)
+  createdAt               DateTime @default(now())
+  updatedAt               DateTime @updatedAt
+}
+
+model ManualGrantLog {
+  id                   String   @id @default(cuid())
+  shop                 String
+  customerId           String
+  customerEmail        String
+  customerDisplayName  String?
+  amount               String
+  currencyCode         String
+  expiresAt            DateTime?
+  notifyCustomer       Boolean  @default(false)
+  reason               String?
+  storeCreditAccountId String?
+  storeCreditTxnId     String?
+  balanceAfterAmount   String?
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+
+  @@index([shop, createdAt])
+  @@index([customerId, createdAt])
+}
