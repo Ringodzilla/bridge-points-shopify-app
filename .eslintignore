@@ -1,0 +1,8 @@
+node_modules
+build
+public/build
+*/*.yml
+.shopify
+archive
+extensions/*/dist
+extensions/*/shopify.d.ts

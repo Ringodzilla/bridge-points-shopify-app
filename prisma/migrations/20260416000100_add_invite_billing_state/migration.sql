@@ -1,0 +1,2 @@
+ALTER TABLE "InviteJob" ADD COLUMN "billedCount" INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE "InviteJob" ADD COLUMN "lastBillingError" TEXT;
