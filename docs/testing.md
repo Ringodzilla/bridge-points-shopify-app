@@ -9,8 +9,8 @@
 
 補足:
 
-- 現在のコードには旧 `一括招待くん` spike が残っています
-- 本ドキュメントは Bridge Points へ置き換えた後の検証方針です
+- 過去実験の route / schema / billing scaffolding は撤去済みです
+- 本ドキュメントは BridgePoint の検証方針です
 
 ## 1. ローカル静的検証
 
@@ -44,10 +44,24 @@ npm run setup:local
 
 ```bash
 npm run config:link
-npm run dev
+npm run dev:bridge
+npm run preview:info
 ```
 
-`npm run dev` は Shopify 公式 CLI の `shopify app dev` を使います。
+`npm run dev` は `bridgepoint` app configuration を明示して Shopify 公式 CLI の `shopify app dev` を起動します。
+`npm run dev:bridge` も同じ BridgePoint 設定を使います。
+
+`npm run preview:info` は次を表示します。
+
+- 固定で使う Shopify 管理画面の preview URL
+- 現在の `trycloudflare` URL
+- tunnel の名前解決状態
+
+注意:
+
+- ブックマークするのは `trycloudflare.com` ではなく、Shopify 管理画面の preview URL にする
+- `trycloudflare` は再起動ごとに変わる
+- 読み込みが止まるときは、ハードリロード、その次に Dev Console の `開発プレビューをクリーンアップ`
 
 ### 確認する項目
 
@@ -67,12 +81,13 @@ npm run dev
 - expiration transaction が履歴上で確認できるか
 - 顧客別の balance と recent transactions が取得できるか
 
-## 4. Flow 検証
+## 4. 自動付与 / billing 検証
 
 - `Order paid` 起点の自動付与が 1 回だけ走るか
 - 顧客未紐付け注文が除外されるか
 - 二重付与防止マーカーが効くか
-- 失敗時の再試行運用が成立するか
+- usage record が超過時だけ積まれるか
+- billing 画面の契約状態と usage 実績が Shopify 側と一致するか
 
 `Send HTTP request` は Plus / Advanced / Grow の制約があるため、v1 では極力 `Send Admin API request` を優先します。
 

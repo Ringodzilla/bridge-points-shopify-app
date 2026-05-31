@@ -1,10 +1,19 @@
 import type { ActionFunctionArgs } from "react-router";
+import { redactCustomerPrivacyData } from "../lib/privacy.server";
 import { authenticate } from "../shopify.server";
 
 export const action = async ({ request }: ActionFunctionArgs) => {
-  const { topic, shop } = await authenticate.webhook(request);
-  console.log(`Received ${topic} compliance webhook for ${shop}`);
+  const { topic, shop, payload } = await authenticate.webhook(request);
+  const result = await redactCustomerPrivacyData({
+    shop,
+    payload: payload ?? {},
+  });
 
-  // TODO: 実データ保存を始めたら、顧客単位の削除処理をここへ実装する。
-  return new Response();
+  console.log(`Received ${topic} compliance webhook for ${shop}`, result);
+
+  return Response.json({
+    ok: true,
+    shop,
+    result,
+  });
 };

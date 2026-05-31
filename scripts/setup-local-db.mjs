@@ -9,14 +9,9 @@ const bootstrapPath = path.join(prismaDir, "local-session-bootstrap.sql");
 
 const upgrades = [
   {
-    table: "InviteJob",
-    column: "billedCount",
-    sql: 'ALTER TABLE "InviteJob" ADD COLUMN "billedCount" INTEGER NOT NULL DEFAULT 0;',
-  },
-  {
-    table: "InviteJob",
-    column: "lastBillingError",
-    sql: 'ALTER TABLE "InviteJob" ADD COLUMN "lastBillingError" TEXT;',
+    table: "ShopSettings",
+    column: "defaultGrantCurrencyCode",
+    sql: 'ALTER TABLE "ShopSettings" ADD COLUMN "defaultGrantCurrencyCode" TEXT;',
   },
 ];
 
@@ -37,6 +32,10 @@ function hasColumn(table, column) {
 
 mkdirSync(prismaDir, { recursive: true });
 runSql(readFileSync(bootstrapPath, "utf8"));
+runSql(`
+  DROP TABLE IF EXISTS "InviteDelivery";
+  DROP TABLE IF EXISTS "InviteJob";
+`);
 
 for (const upgrade of upgrades) {
   if (!hasColumn(upgrade.table, upgrade.column)) {

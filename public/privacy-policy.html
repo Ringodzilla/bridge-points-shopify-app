@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>BridgePoint Privacy Policy</title>
+    <style>
+      body { font-family: -apple-system, BlinkMacSystemFont, "Hiragino Sans", "Yu Gothic", sans-serif; margin: 0; padding: 40px 20px; background: #f7f8fc; color: #1f1730; }
+      main { max-width: 860px; margin: 0 auto; background: white; border-radius: 20px; padding: 32px; box-shadow: 0 20px 60px rgba(31, 23, 48, 0.08); }
+      h1, h2 { margin-top: 0; }
+      h2 { margin-top: 32px; }
+      p, li { line-height: 1.8; }
+      ul { padding-left: 20px; }
+      .muted { color: #625875; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>BridgePoint Privacy Policy</h1>
+      <p class="muted">Last updated: 2026-05-16</p>
+      <p>
+        BridgePoint is a lightweight Shopify app that helps merchants manage store-credit-based
+        point operations. This policy explains what data the app processes, why it processes that
+        data, and how the data is protected.
+      </p>
+
+      <h2>1. Data we process</h2>
+      <ul>
+        <li>Shop domain and app installation metadata</li>
+        <li>Customer identifiers required to display balances and apply store credit</li>
+        <li>Customer name and email when needed for merchant-facing admin operations</li>
+        <li>Order identifiers and order totals needed to process order-paid automatic grants</li>
+        <li>Store credit transaction data returned by Shopify</li>
+        <li>BridgePoint settings, manual grant logs, and idempotency keys</li>
+      </ul>
+
+      <h2>2. Why we process data</h2>
+      <ul>
+        <li>Display customer store credit balances and recent history</li>
+        <li>Allow merchants to manually grant store credit from Shopify admin</li>
+        <li>Generate and support automated grant workflows</li>
+        <li>Prevent duplicate grant execution</li>
+        <li>Provide merchant-facing dashboards and operational logs</li>
+      </ul>
+
+      <h2>3. Data minimization</h2>
+      <p>
+        BridgePoint uses Shopify Store Credit as the source of truth for balances. The app stores
+        only the minimum supplementary data required for settings, logs, and duplicate-execution
+        prevention. The app does not maintain a separate customer balance ledger as its source of
+        truth.
+      </p>
+
+      <h2>4. Sharing and selling data</h2>
+      <p>
+        BridgePoint does not sell personal data. Data is processed only to provide the merchant
+        features described above and is not used for unrelated advertising or profiling purposes.
+      </p>
+
+      <h2>5. Retention</h2>
+      <p>
+        Operational data is retained only as long as needed for app functionality, merchant support,
+        compliance, and troubleshooting. Merchants can request deletion as part of app uninstall and
+        Shopify privacy compliance workflows.
+      </p>
+
+      <h2>6. Security</h2>
+      <ul>
+        <li>Data is transmitted over HTTPS/TLS in production</li>
+        <li>Access to merchant data is limited to authorized operational use</li>
+        <li>Only the minimum required customer fields are requested</li>
+      </ul>
+
+      <h2>7. Contact</h2>
+      <p>
+        For privacy or data protection questions, contact the BridgePoint operator through the
+        support contact provided in the Shopify App Store listing or merchant onboarding materials.
+      </p>
+    </main>
+  </body>
+</html>

@@ -1,4 +1,9 @@
+import { Prisma } from "@prisma/client";
 import prisma from "../db.server";
+import {
+  recordProcessedOrderUsageCharge,
+  type BillingContextLike,
+} from "./billing.server";
 
 type AdminGraphqlClient = {
   graphql: (
@@ -15,6 +20,14 @@ type Money = {
 };
 
 type CustomerMatch = {
+  id: string;
+  displayName: string | null;
+  defaultEmailAddress: {
+    emailAddress: string | null;
+  } | null;
+};
+
+type CustomerReference = {
   id: string;
   displayName: string | null;
   defaultEmailAddress: {
@@ -117,8 +130,106 @@ function parseMoneyAmount(value: string | null | undefined) {
   return Number.isFinite(parsed) ? parsed : 0;
 }
 
+function normalizeCurrencyCode(value: string | null | undefined) {
+  return String(value ?? "")
+    .trim()
+    .toUpperCase();
+}
+
+function isValidCurrencyCode(value: string | null | undefined) {
+  return /^[A-Z]{3}$/.test(normalizeCurrencyCode(value));
+}
+
+function normalizePositiveInteger(
+  value: number | string | null | undefined,
+  fallback: number,
+) {
+  const parsed = Number(value);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+function buildOrderPaidGrantLockKey(orderId: string) {
+  return `order_paid:${orderId.trim()}`;
+}
+
+function calculateOrderPaidGrantAmount({
+  orderTotalAmount,
+  grantRateNumerator,
+  grantRateDenominator,
+}: {
+  orderTotalAmount: string;
+  grantRateNumerator: number;
+  grantRateDenominator: number;
+}) {
+  const parsedOrderTotalAmount = Number(orderTotalAmount);
+
+  if (!Number.isFinite(parsedOrderTotalAmount) || parsedOrderTotalAmount <= 0) {
+    throw new Error("注文金額は 0 より大きい数値で入力してください。");
+  }
+
+  return Math.floor((parsedOrderTotalAmount * grantRateNumerator) / grantRateDenominator);
+}
+
+async function buildOrderPaidGrantPreview({
+  admin,
+  shop,
+  orderId,
+  customerId,
+  orderTotalAmount,
+}: {
+  admin: AdminGraphqlClient;
+  shop: string;
+  orderId: string;
+  customerId: string;
+  orderTotalAmount: string;
+}) {
+  const normalizedOrderId = orderId.trim();
+  const normalizedCustomerId = customerId.trim();
+
+  if (!normalizedOrderId) {
+    throw new Error("注文 ID を入力してください。");
+  }
+
+  if (!normalizedCustomerId) {
+    throw new Error("顧客 ID を入力してください。");
+  }
+
+  const { shopCurrency, settings } =
+    await getConfiguredGrantCurrencyCode({
+      admin,
+      shop,
+    });
+  const grantAmount = calculateOrderPaidGrantAmount({
+    orderTotalAmount,
+    grantRateNumerator: settings.grantRateNumerator,
+    grantRateDenominator: settings.grantRateDenominator,
+  });
+  const key = buildOrderPaidGrantLockKey(normalizedOrderId);
+
+  return {
+    normalizedOrderId,
+    normalizedCustomerId,
+    grantAmount,
+    settings,
+    preview: {
+      key,
+      orderId: normalizedOrderId,
+      customerId: normalizedCustomerId,
+      orderTotalAmount,
+      shopCurrency,
+      grantCurrencyCode: shopCurrency,
+      grantAmount: String(grantAmount),
+      defaultExpiryDays: settings.defaultExpiryDays,
+      grantRateNumerator: settings.grantRateNumerator,
+      grantRateDenominator: settings.grantRateDenominator,
+    },
+  };
+}
+
 function serializeManualGrantLog(log: {
   id: string;
+  customerEmail: string;
+  customerDisplayName: string | null;
   amount: string;
   currencyCode: string;
   createdAt: Date;
@@ -129,6 +240,8 @@ function serializeManualGrantLog(log: {
 }) {
   return {
     id: log.id,
+    customerEmail: log.customerEmail,
+    customerDisplayName: log.customerDisplayName,
     amount: log.amount,
     currencyCode: log.currencyCode,
     createdAt: log.createdAt.toISOString(),
@@ -136,6 +249,47 @@ function serializeManualGrantLog(log: {
     reason: log.reason,
     notifyCustomer: log.notifyCustomer,
     balanceAfterAmount: log.balanceAfterAmount,
+  };
+}
+
+function serializeGrantExecutionLock(lock: {
+  id: string;
+  key: string;
+  sourceType: string;
+  sourceId: string | null;
+  status: string;
+  payloadJson: string | null;
+  processedAt: Date | null;
+  createdAt: Date;
+}) {
+  return {
+    id: lock.id,
+    key: lock.key,
+    sourceType: lock.sourceType,
+    sourceId: lock.sourceId,
+    status: lock.status,
+    payloadJson: lock.payloadJson,
+    processedAt: lock.processedAt?.toISOString() ?? null,
+    createdAt: lock.createdAt.toISOString(),
+  };
+}
+
+function serializeShopSettings(settings: {
+  autoGrantEnabled: boolean;
+  grantRateNumerator: number;
+  grantRateDenominator: number;
+  defaultGrantCurrencyCode: string | null;
+  defaultExpiryDays: number;
+  manualDefaultExpiryDays: number;
+}) {
+  return {
+    autoGrantEnabled: settings.autoGrantEnabled,
+    grantRateNumerator: settings.grantRateNumerator,
+    grantRateDenominator: settings.grantRateDenominator,
+    defaultGrantCurrencyCode:
+      normalizeCurrencyCode(settings.defaultGrantCurrencyCode) || "JPY",
+    defaultExpiryDays: settings.defaultExpiryDays,
+    manualDefaultExpiryDays: settings.manualDefaultExpiryDays,
   };
 }
 
@@ -154,31 +308,13 @@ function mapTransactionType(typeName: SummaryTransactionNode["__typename"]) {
   }
 }
 
-async function findCustomerById(
-  admin: AdminGraphqlClient,
-  customerId: string,
-): Promise<CustomerMatch | null> {
-  const response = await admin.graphql(
-    `#graphql
-      query BridgePointsCustomerById($id: ID!) {
-        customer(id: $id) {
-          id
-          displayName
-          defaultEmailAddress {
-            emailAddress
-          }
-        }
-      }
-    `,
-    {
-      variables: {
-        id: customerId,
-      },
-    },
+function isProtectedCustomerDataError(message: string | null | undefined) {
+  const normalized = (message ?? "").toLowerCase();
+  return (
+    normalized.includes("not approved to access the customer object") ||
+    normalized.includes("protected customer data") ||
+    normalized.includes("access_denied")
   );
-
-  const json = await response.json();
-  return (json.data?.customer as CustomerMatch | null) ?? null;
 }
 
 async function findCustomerByEmail(
@@ -225,7 +361,7 @@ async function createManualGrantLog({
   reason,
 }: {
   shop: string;
-  customer: CustomerMatch;
+  customer: CustomerReference;
   transaction: {
     id: string;
     amount: Money;
@@ -264,14 +400,12 @@ async function creditStoreCreditAccount({
   amount,
   currencyCode,
   expiresInDays,
-  notifyCustomer,
 }: {
   admin: AdminGraphqlClient;
   customerId: string;
   amount: string;
   currencyCode: string;
   expiresInDays: number;
-  notifyCustomer: boolean;
 }) {
   const expiresAt = buildExpiryAt(expiresInDays);
   const response = await admin.graphql(
@@ -313,7 +447,6 @@ async function creditStoreCreditAccount({
             currencyCode,
           },
           expiresAt,
-          notify: notifyCustomer,
         },
       },
     },
@@ -358,6 +491,614 @@ export async function getShopCurrency(admin: AdminGraphqlClient) {
   return json.data?.shop?.currencyCode ?? "JPY";
 }
 
+export async function getShopSettings({
+  shop,
+  fallbackGrantCurrencyCode,
+}: {
+  shop: string;
+  fallbackGrantCurrencyCode: string;
+}) {
+  const normalizedFallback = normalizeCurrencyCode(fallbackGrantCurrencyCode) || "JPY";
+  const existing = await prisma.shopSettings.findUnique({
+    where: { shop },
+  });
+
+  if (!existing) {
+    return prisma.shopSettings.create({
+      data: {
+        shop,
+        autoGrantEnabled: true,
+        grantRateNumerator: 1,
+        grantRateDenominator: 100,
+        defaultGrantCurrencyCode: normalizedFallback,
+        defaultExpiryDays: 365,
+        manualDefaultExpiryDays: 365,
+      },
+    });
+  }
+
+  const normalizedSettings = {
+    autoGrantEnabled: existing.autoGrantEnabled,
+    grantRateNumerator: normalizePositiveInteger(existing.grantRateNumerator, 1),
+    grantRateDenominator: normalizePositiveInteger(existing.grantRateDenominator, 100),
+    defaultGrantCurrencyCode: isValidCurrencyCode(existing.defaultGrantCurrencyCode)
+      ? normalizeCurrencyCode(existing.defaultGrantCurrencyCode)
+      : normalizedFallback,
+    defaultExpiryDays: normalizePositiveInteger(existing.defaultExpiryDays, 365),
+    manualDefaultExpiryDays: normalizePositiveInteger(existing.manualDefaultExpiryDays, 365),
+  };
+
+  if (
+    existing.autoGrantEnabled !== normalizedSettings.autoGrantEnabled ||
+    existing.grantRateNumerator !== normalizedSettings.grantRateNumerator ||
+    existing.grantRateDenominator !== normalizedSettings.grantRateDenominator ||
+    existing.defaultGrantCurrencyCode !== normalizedSettings.defaultGrantCurrencyCode ||
+    existing.defaultExpiryDays !== normalizedSettings.defaultExpiryDays ||
+    existing.manualDefaultExpiryDays !== normalizedSettings.manualDefaultExpiryDays
+  ) {
+    return prisma.shopSettings.update({
+      where: { shop },
+      data: normalizedSettings,
+    });
+  }
+
+  return existing;
+}
+
+export async function getConfiguredGrantCurrencyCode({
+  admin,
+  shop,
+}: {
+  admin: AdminGraphqlClient;
+  shop: string;
+}) {
+  const shopCurrency = await getShopCurrency(admin);
+  const settings = await getShopSettings({
+    shop,
+    fallbackGrantCurrencyCode: shopCurrency,
+  });
+
+  return {
+    shopCurrency,
+    grantCurrencyCode: normalizeCurrencyCode(
+      settings.defaultGrantCurrencyCode ?? shopCurrency,
+    ),
+    settings,
+  };
+}
+
+export async function updateDefaultGrantCurrencyCode({
+  shop,
+  currencyCode,
+}: {
+  shop: string;
+  currencyCode: string;
+}) {
+  const normalizedCurrencyCode = normalizeCurrencyCode(currencyCode);
+
+  if (!isValidCurrencyCode(normalizedCurrencyCode)) {
+    throw new Error("通貨コードは 3 文字の ISO コードで入力してください。");
+  }
+
+  return prisma.shopSettings.upsert({
+    where: { shop },
+    update: {
+      defaultGrantCurrencyCode: normalizedCurrencyCode,
+    },
+    create: {
+      shop,
+      defaultGrantCurrencyCode: normalizedCurrencyCode,
+    },
+  });
+}
+
+export async function updateShopSettings({
+  shop,
+  settings,
+}: {
+  shop: string;
+  settings: {
+    autoGrantEnabled: boolean;
+    grantRateNumerator: number;
+    grantRateDenominator: number;
+    defaultGrantCurrencyCode: string;
+    defaultExpiryDays: number;
+    manualDefaultExpiryDays: number;
+  };
+}) {
+  const normalizedCurrencyCode = normalizeCurrencyCode(settings.defaultGrantCurrencyCode);
+
+  if (!isValidCurrencyCode(normalizedCurrencyCode)) {
+    throw new Error("通貨コードは 3 文字の ISO コードで入力してください。");
+  }
+
+  const normalizedSettings = {
+    autoGrantEnabled: settings.autoGrantEnabled,
+    grantRateNumerator: normalizePositiveInteger(settings.grantRateNumerator, 1),
+    grantRateDenominator: normalizePositiveInteger(settings.grantRateDenominator, 100),
+    defaultGrantCurrencyCode: normalizedCurrencyCode,
+    defaultExpiryDays: normalizePositiveInteger(settings.defaultExpiryDays, 365),
+    manualDefaultExpiryDays: normalizePositiveInteger(
+      settings.manualDefaultExpiryDays,
+      365,
+    ),
+  };
+
+  return prisma.shopSettings.upsert({
+    where: { shop },
+    update: normalizedSettings,
+    create: {
+      shop,
+      ...normalizedSettings,
+    },
+  });
+}
+
+export async function reserveGrantExecutionLock({
+  shop,
+  key,
+  sourceType,
+  sourceId,
+  payload,
+}: {
+  shop: string;
+  key: string;
+  sourceType: string;
+  sourceId?: string | null;
+  payload?: Record<string, unknown> | null;
+}) {
+  const payloadJson = payload ? JSON.stringify(payload) : null;
+
+  try {
+    const created = await prisma.grantExecutionLock.create({
+      data: {
+        shop,
+        key,
+        sourceType,
+        sourceId: sourceId ?? null,
+        payloadJson,
+      },
+    });
+
+    return {
+      created: true,
+      lock: serializeGrantExecutionLock(created),
+    };
+  } catch (error) {
+    if (
+      error instanceof Prisma.PrismaClientKnownRequestError &&
+      error.code === "P2002"
+    ) {
+      const existing = await prisma.grantExecutionLock.findUnique({
+        where: {
+          shop_key: {
+            shop,
+            key,
+          },
+        },
+      });
+
+      if (existing?.status === "failed") {
+        const retried = await prisma.grantExecutionLock.update({
+          where: {
+            shop_key: {
+              shop,
+              key,
+            },
+          },
+          data: {
+            sourceType,
+            sourceId: sourceId ?? null,
+            status: "pending",
+            payloadJson,
+            processedAt: null,
+          },
+        });
+
+        return {
+          created: true,
+          lock: serializeGrantExecutionLock(retried),
+        };
+      }
+
+      return {
+        created: false,
+        lock: existing ? serializeGrantExecutionLock(existing) : null,
+      };
+    }
+
+    throw error;
+  }
+}
+
+async function finalizeGrantExecutionLock({
+  shop,
+  key,
+  status,
+  payload,
+  processedAt,
+}: {
+  shop: string;
+  key: string;
+  status: string;
+  payload?: Record<string, unknown> | null;
+  processedAt?: Date | null;
+}) {
+  const updated = await prisma.grantExecutionLock.update({
+    where: {
+      shop_key: {
+        shop,
+        key,
+      },
+    },
+    data: {
+      status,
+      ...(payload !== undefined
+        ? {
+            payloadJson: payload ? JSON.stringify(payload) : null,
+          }
+        : {}),
+      ...(processedAt !== undefined ? { processedAt } : {}),
+    },
+  });
+
+  return serializeGrantExecutionLock(updated);
+}
+
+export async function markGrantExecutionLockProcessed({
+  shop,
+  key,
+  status = "processed",
+}: {
+  shop: string;
+  key: string;
+  status?: string;
+}) {
+  return finalizeGrantExecutionLock({
+    shop,
+    key,
+    status,
+    processedAt: new Date(),
+  });
+}
+
+export async function simulateOrderPaidGrantExecution({
+  admin,
+  shop,
+  orderId,
+  customerId,
+  orderTotalAmount,
+}: {
+  admin: AdminGraphqlClient;
+  shop: string;
+  orderId: string;
+  customerId: string;
+  orderTotalAmount: string;
+}) {
+  const { normalizedOrderId, preview, settings, grantAmount } =
+    await buildOrderPaidGrantPreview({
+      admin,
+      shop,
+      orderId,
+      customerId,
+      orderTotalAmount,
+    });
+
+  if (!settings.autoGrantEnabled) {
+    return {
+      status: "disabled" as const,
+      preview,
+      lock: null,
+    };
+  }
+
+  if (preview.grantCurrencyCode !== preview.shopCurrency) {
+    return {
+      status: "currency_mismatch" as const,
+      preview,
+      lock: null,
+    };
+  }
+
+  if (grantAmount <= 0) {
+    return {
+      status: "zero_amount" as const,
+      preview,
+      lock: null,
+    };
+  }
+
+  const reserved = await reserveGrantExecutionLock({
+    shop,
+    key: preview.key,
+    sourceType: "order_paid_simulation",
+    sourceId: normalizedOrderId,
+    payload: preview,
+  });
+
+  if (!reserved.created) {
+    return {
+      status: "duplicate" as const,
+      preview,
+      lock: reserved.lock,
+    };
+  }
+
+  const lock = await markGrantExecutionLockProcessed({
+    shop,
+    key: preview.key,
+    status: "simulated",
+  });
+
+  return {
+    status: "simulated" as const,
+    preview,
+    lock,
+  };
+}
+
+export async function processOrderPaidGrant({
+  admin,
+  billing,
+  shop,
+  orderId,
+  customerId,
+  orderTotalAmount,
+}: {
+  admin: AdminGraphqlClient;
+  billing?: BillingContextLike;
+  shop: string;
+  orderId: string;
+  customerId: string;
+  orderTotalAmount: string;
+}) {
+  const { normalizedOrderId, normalizedCustomerId, preview, settings, grantAmount } =
+    await buildOrderPaidGrantPreview({
+      admin,
+      shop,
+      orderId,
+      customerId,
+      orderTotalAmount,
+    });
+
+  if (!settings.autoGrantEnabled) {
+    return {
+      status: "disabled" as const,
+      preview,
+      lock: null,
+      transaction: null,
+      usageCharge: null,
+    };
+  }
+
+  if (preview.grantCurrencyCode !== preview.shopCurrency) {
+    return {
+      status: "currency_mismatch" as const,
+      preview,
+      lock: null,
+      transaction: null,
+      usageCharge: null,
+    };
+  }
+
+  if (grantAmount <= 0) {
+    return {
+      status: "zero_amount" as const,
+      preview,
+      lock: null,
+      transaction: null,
+      usageCharge: null,
+    };
+  }
+
+  const reserved = await reserveGrantExecutionLock({
+    shop,
+    key: preview.key,
+    sourceType: "order_paid",
+    sourceId: normalizedOrderId,
+    payload: preview,
+  });
+
+  if (!reserved.created) {
+    return {
+      status: "duplicate" as const,
+      preview,
+      lock: reserved.lock,
+      transaction: null,
+      usageCharge: null,
+    };
+  }
+
+  let transaction:
+    | {
+        id: string;
+        amount: Money;
+        createdAt: string;
+        expiresAt: string | null;
+        account: {
+          id: string;
+          balance: Money;
+        };
+      }
+    | null = null;
+
+  try {
+    transaction = await creditStoreCreditAccount({
+      admin,
+      customerId: normalizedCustomerId,
+      amount: String(grantAmount),
+      currencyCode: preview.grantCurrencyCode,
+      expiresInDays: settings.defaultExpiryDays,
+    });
+  } catch (error) {
+    const message =
+      error instanceof Error
+        ? error.message
+        : "Order paid 自動付与中に予期しないエラーが発生しました。";
+
+    const lock = await finalizeGrantExecutionLock({
+      shop,
+      key: preview.key,
+      status: "failed",
+      payload: {
+        ...preview,
+        errorMessage: message,
+      },
+      processedAt: null,
+    });
+
+    return {
+      status: "failed" as const,
+      preview,
+      lock,
+      transaction: null,
+      usageCharge: null,
+      errorMessage: message,
+    };
+  }
+
+  const lock = await finalizeGrantExecutionLock({
+    shop,
+    key: preview.key,
+    status: "processed",
+    payload: {
+      ...preview,
+      storeCreditTransactionId: transaction.id,
+      balanceAfterAmount: transaction.account.balance.amount,
+    },
+    processedAt: new Date(),
+  });
+
+  let usageCharge:
+    | Awaited<ReturnType<typeof recordProcessedOrderUsageCharge>>
+    | {
+        status: "error";
+        errorMessage: string;
+      }
+    | null = null;
+
+  try {
+    usageCharge = billing
+      ? await recordProcessedOrderUsageCharge({
+          billing,
+          shop,
+          orderId: normalizedOrderId,
+        })
+      : await recordProcessedOrderUsageCharge({
+          admin,
+          shop,
+          orderId: normalizedOrderId,
+        });
+  } catch (error) {
+    usageCharge = {
+      status: "error",
+      errorMessage:
+        error instanceof Error
+          ? error.message
+          : "usage record の作成中に予期しないエラーが発生しました。",
+    };
+  }
+
+  return {
+    status: "processed" as const,
+    preview,
+    lock,
+    transaction,
+    usageCharge,
+  };
+}
+
+export async function getShopDashboardSummary({
+  admin,
+  shop,
+}: {
+  admin: AdminGraphqlClient;
+  shop: string;
+}) {
+  const { shopCurrency, grantCurrencyCode, settings } = await getConfiguredGrantCurrencyCode({
+    admin,
+    shop,
+  });
+  const [manualGrantLogs, recentGrantLocks] = await Promise.all([
+    prisma.manualGrantLog.findMany({
+      where: { shop },
+      orderBy: { createdAt: "desc" },
+    }),
+    prisma.grantExecutionLock.findMany({
+      where: { shop },
+      orderBy: { createdAt: "desc" },
+      take: 5,
+    }),
+  ]);
+
+  const now = new Date();
+  const currentMonthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+  const previousMonthStart = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+
+  const totalCustomerIds = new Set<string>();
+  const currentMonthCustomerIds = new Set<string>();
+  const totalsByCurrency = new Map<
+    string,
+    {
+      currencyCode: string;
+      totalAmount: number;
+      currentMonthAmount: number;
+      previousMonthAmount: number;
+      totalCount: number;
+    }
+  >();
+
+  for (const log of manualGrantLogs) {
+    totalCustomerIds.add(log.customerId);
+
+    const amount = parseMoneyAmount(log.amount);
+    const currencyCode = normalizeCurrencyCode(log.currencyCode) || grantCurrencyCode;
+    const existing =
+      totalsByCurrency.get(currencyCode) ??
+      {
+        currencyCode,
+        totalAmount: 0,
+        currentMonthAmount: 0,
+        previousMonthAmount: 0,
+        totalCount: 0,
+      };
+
+    existing.totalAmount += amount;
+    existing.totalCount += 1;
+
+    if (log.createdAt >= currentMonthStart) {
+      currentMonthCustomerIds.add(log.customerId);
+      existing.currentMonthAmount += amount;
+    } else if (log.createdAt >= previousMonthStart) {
+      existing.previousMonthAmount += amount;
+    }
+
+    totalsByCurrency.set(currencyCode, existing);
+  }
+
+  const currentMonthLogs = manualGrantLogs.filter((log) => log.createdAt >= currentMonthStart);
+
+  return {
+    shopCurrency,
+    grantCurrencyCode,
+    settings: serializeShopSettings(settings),
+    metrics: {
+      totalManualGrantCount: manualGrantLogs.length,
+      totalManualGrantCustomerCount: totalCustomerIds.size,
+      currentMonthManualGrantCount: currentMonthLogs.length,
+      currentMonthManualGrantCustomerCount: currentMonthCustomerIds.size,
+      recentIdempotencyLockCount: recentGrantLocks.length,
+    },
+    currencyBreakdown: Array.from(totalsByCurrency.values()).sort((left, right) =>
+      left.currencyCode.localeCompare(right.currencyCode),
+    ),
+    recentManualGrants: manualGrantLogs
+      .slice(0, 5)
+      .map(serializeManualGrantLog),
+    recentGrantLocks: recentGrantLocks.map(serializeGrantExecutionLock),
+  };
+}
+
 export async function getCustomerStoreCreditSummary({
   admin,
   shop,
@@ -367,7 +1108,12 @@ export async function getCustomerStoreCreditSummary({
   shop: string;
   customerId: string;
 }) {
-  const [response, shopCurrency, recentManualGrants] = await Promise.all([
+  const { shopCurrency, grantCurrencyCode, settings } = await getConfiguredGrantCurrencyCode({
+    admin,
+    shop,
+  });
+
+  const [response, recentManualGrants] = await Promise.all([
     admin.graphql(
       `#graphql
         query BridgePointsCustomerStoreCreditSummary($id: ID!) {
@@ -377,7 +1123,7 @@ export async function getCustomerStoreCreditSummary({
             defaultEmailAddress {
               emailAddress
             }
-            storeCreditAccounts(first: 1) {
+            storeCreditAccounts(first: 20) {
               edges {
                 node {
                   id
@@ -450,7 +1196,6 @@ export async function getCustomerStoreCreditSummary({
         },
       },
     ),
-    getShopCurrency(admin),
     prisma.manualGrantLog.findMany({
       where: {
         shop,
@@ -464,13 +1209,36 @@ export async function getCustomerStoreCreditSummary({
   ]);
 
   const json = await response.json();
+  const graphqlErrors = (json.errors ?? []) as Array<{ message?: string }>;
+  const topLevelGraphqlError = graphqlErrors[0]?.message;
+
+  if (topLevelGraphqlError && isProtectedCustomerDataError(topLevelGraphqlError)) {
+    return {
+      shopCurrency,
+      grantCurrencyCode,
+      settings: serializeShopSettings(settings),
+      customer: {
+        id: customerId,
+        displayName: null,
+        email: null,
+      },
+      account: null,
+      nextExpiration: null,
+      recentTransactions: [],
+      recentManualGrants: recentManualGrants.map(serializeManualGrantLog),
+    };
+  }
+
   const customer = (json.data?.customer as CustomerSummaryRecord | null) ?? null;
 
   if (!customer) {
     throw new Error("顧客情報を取得できませんでした。");
   }
 
-  const account = customer.storeCreditAccounts.edges[0]?.node ?? null;
+  const account =
+    customer.storeCreditAccounts.edges.find(
+      ({ node }) => node.balance.currencyCode === grantCurrencyCode,
+    )?.node ?? null;
   const expiringCredits = (account?.expiringTransactions.edges ?? [])
     .map((edge) => edge.node)
     .filter((node): node is CreditTransactionNode => Boolean(node?.id));
@@ -495,6 +1263,8 @@ export async function getCustomerStoreCreditSummary({
 
   return {
     shopCurrency,
+    grantCurrencyCode,
+    settings: serializeShopSettings(settings),
     customer: {
       id: customer.id,
       displayName: customer.displayName,
@@ -558,7 +1328,6 @@ export async function issueManualStoreCredit({
     amount,
     currencyCode,
     expiresInDays,
-    notifyCustomer,
   });
 
   await createManualGrantLog({
@@ -586,31 +1355,32 @@ export async function issueManualStoreCreditByCustomerId({
   notifyCustomer,
   reason,
 }: ManualGrantByCustomerIdRequest) {
-  const customer = await findCustomerById(admin, customerId);
-
-  if (!customer) {
-    throw new Error("顧客情報を解決できませんでした。");
-  }
-
   const transaction = await creditStoreCreditAccount({
     admin,
     customerId,
     amount,
     currencyCode,
     expiresInDays,
-    notifyCustomer,
   });
 
   await createManualGrantLog({
     shop,
-    customer,
+    customer: {
+      id: customerId,
+      displayName: null,
+      defaultEmailAddress: null,
+    },
     transaction,
     notifyCustomer,
     reason,
   });
 
   return {
-    customer,
+    customer: {
+      id: customerId,
+      displayName: null,
+      defaultEmailAddress: null,
+    },
     transaction,
   };
 }

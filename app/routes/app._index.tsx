@@ -1,99 +1,228 @@
-import { Link } from "react-router";
+import type { LoaderFunctionArgs } from "react-router";
+import { Link, useLoaderData } from "react-router";
+import { getShopDashboardSummary } from "../lib/store-credit.server";
+import { authenticate } from "../shopify.server";
+
+function formatMoney(amount: number, currencyCode: string) {
+  return new Intl.NumberFormat("ja-JP", {
+    style: "currency",
+    currency: currencyCode,
+    maximumFractionDigits: 2,
+  }).format(amount);
+}
+
+function formatDate(value: string | null) {
+  if (!value) {
+    return "未処理";
+  }
+
+  return new Intl.DateTimeFormat("ja-JP", {
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(new Date(value));
+}
+
+export const loader = async ({ request }: LoaderFunctionArgs) => {
+  const { admin, session } = await authenticate.admin(request);
+  return getShopDashboardSummary({
+    admin,
+    shop: session.shop,
+  });
+};
 
 export default function Index() {
+  const {
+    grantCurrencyCode,
+    settings,
+    metrics,
+    currencyBreakdown,
+    recentManualGrants,
+    recentGrantLocks,
+  } = useLoaderData<typeof loader>();
+
   return (
-    <s-page heading="Bridge Points">
+    <s-page heading="BridgePoint">
       <div className="rnk-page">
         <section className="rnk-hero">
-          <span className="rnk-eyebrow">Bridge Points</span>
+          <span className="rnk-eyebrow">BridgePoint</span>
           <h1 className="rnk-title">
             Shopify ネイティブの Store Credit で、
             軽く始めるポイント基盤をつくる。
           </h1>
           <p className="rnk-subtitle">
-            高機能ロイヤルティアプリの手前で必要になる、手動付与、自動付与、
-            残高可視化、失効可視化だけに絞った Bridge Points の骨格です。
+            手動付与、customer details、`orders/paid` 自動付与、二重付与防止、
+            そして最小の billing / KPI ダッシュボードまでを小さく積み上げています。
           </p>
           <div className="rnk-actions">
             <Link className="rnk-button" to="/app/manual-credit">
               手動付与を試す
             </Link>
-            <Link className="rnk-button-secondary" to="/app/billing">
-              課金と検証方針を確認
+            <Link className="rnk-button-secondary" to="/app/settings">
+              設定を整える
+            </Link>
+            <Link className="rnk-button-secondary" to="/app/flow-setup">
+              Flow テンプレートを見る
+            </Link>
+            <Link className="rnk-button-secondary" to="/app/release-readiness">
+              公開準備を見る
             </Link>
           </div>
         </section>
 
         <section className="rnk-grid">
           <article className="rnk-card">
-            <span className="rnk-eyebrow">Status</span>
-            <h2>アプリ基盤</h2>
+            <span className="rnk-eyebrow">Manual Grants</span>
+            <h2>累計手動付与件数</h2>
+            <p className="rnk-kpi">{metrics.totalManualGrantCount}</p>
+            <p className="rnk-muted">
+              付与対象顧客数: {metrics.totalManualGrantCustomerCount}
+            </p>
+          </article>
+          <article className="rnk-card">
+            <span className="rnk-eyebrow">This Month</span>
+            <h2>今月の手動付与件数</h2>
+            <p className="rnk-kpi">{metrics.currentMonthManualGrantCount}</p>
+            <p className="rnk-muted">
+              付与対象顧客数: {metrics.currentMonthManualGrantCustomerCount}
+            </p>
+          </article>
+          <article className="rnk-card">
+            <span className="rnk-eyebrow">Settings</span>
+            <h2>現在の手動付与通貨</h2>
+            <p className="rnk-kpi">{grantCurrencyCode}</p>
+            <p className="rnk-muted">
+              自動付与通貨はショップ通貨固定 / 手動期限 {settings.manualDefaultExpiryDays} 日 / 自動期限 {settings.defaultExpiryDays} 日
+            </p>
+          </article>
+          <article className="rnk-card">
+            <span className="rnk-eyebrow">Idempotency</span>
+            <h2>二重付与防止基盤</h2>
             <p className="rnk-kpi">Ready</p>
             <p className="rnk-muted">
-              React Router テンプレート、Prisma、埋め込みアプリ構成を採用。
-            </p>
-          </article>
-          <article className="rnk-card">
-            <span className="rnk-eyebrow">Scope</span>
-            <h2>Store Credit 権限</h2>
-            <p className="rnk-kpi">4 scopes</p>
-            <p className="rnk-muted">
-              `read_customers` に加えて、Store Credit の参照・付与に必要な scope を使います。
-            </p>
-          </article>
-          <article className="rnk-card">
-            <span className="rnk-eyebrow">Ledger</span>
-            <h2>残高の正本</h2>
-            <p className="rnk-kpi">Native</p>
-            <p className="rnk-muted">
-              ポイント残高の正本は独自 DB ではなく Shopify Store Credit に寄せます。
-            </p>
-          </article>
-          <article className="rnk-card">
-            <span className="rnk-eyebrow">Billing</span>
-            <h2>収益化前提</h2>
-            <p className="rnk-kpi">Usage</p>
-            <p className="rnk-muted">
-              App Store 前提で、ポイント付与処理件数に応じた従量課金の骨格を準備済みです。
+              最近の lock 件数: {metrics.recentIdempotencyLockCount}
             </p>
           </article>
         </section>
 
         <section className="rnk-split">
-          <article className="rnk-callout">
-            <h2>今の骨格に入っているもの</h2>
+          <article className="rnk-card">
+            <h2>設定の要点</h2>
             <ul className="rnk-list">
-              <li>Shopify 公開アプリ前提の `AppStore` 配布設定</li>
-              <li>Compliance webhook の受け口</li>
-              <li>Bridge Points 用の日本語ダッシュボード導線</li>
-              <li>Store Credit 手動付与 route</li>
-              <li>customer details block / action からの特別付与</li>
-              <li>手動付与ログ保存</li>
-              <li>ポイント基盤向け usage billing の plan 定義</li>
-              <li>Prisma + SQLite の標準セッション保存</li>
+              <li>手動付与通貨: {grantCurrencyCode}</li>
+              <li>自動付与通貨: ショップ通貨固定</li>
+              <li>
+                自動付与テンプレート: {settings.autoGrantEnabled ? "有効" : "無効"}
+              </li>
+              <li>
+                付与率: {settings.grantRateNumerator}/{settings.grantRateDenominator}
+              </li>
+              <li>手動付与の既定期限: {settings.manualDefaultExpiryDays} 日</li>
+              <li>自動付与の既定期限: {settings.defaultExpiryDays} 日</li>
             </ul>
           </article>
 
-          <article className="rnk-callout">
-            <h2>まだ入れていないもの</h2>
+          <article className="rnk-card">
+            <h2>いまのダッシュボードの前提</h2>
             <ul className="rnk-list">
-              <li>Order paid 起点の Flow 自動付与</li>
-              <li>失効予定の集計表示</li>
-              <li>従量課金の本番請求切り替え</li>
-              <li>ポイント付与ルールの設定画面</li>
+              <li>KPI はまず app 側の手動付与ログをもとに表示</li>
+              <li>異なる通貨を混ぜないよう、金額は通貨別に分けて表示</li>
+              <li>Store Credit 全体残高のネイティブ集計は次段階</li>
+              <li>`orders/paid` 自動付与と usage billing は開発ストアで実地確認済み</li>
             </ul>
           </article>
         </section>
 
         <section className="rnk-card">
-          <h2>次の実装順</h2>
-          <div className="rnk-pill-row">
-            <span className="rnk-pill" data-tone="success">1. 手動付与 route</span>
-            <span className="rnk-pill" data-tone="success">2. 顧客詳細 block / action</span>
-            <span className="rnk-pill" data-tone="warning">3. 設定モデル</span>
-            <span className="rnk-pill" data-tone="warning">4. Flow 自動付与</span>
-            <span className="rnk-pill" data-tone="warning">5. KPI 集計</span>
-          </div>
+          <h2>通貨別の手動付与 KPI</h2>
+          {currencyBreakdown.length === 0 ? (
+            <p className="rnk-muted">まだ手動付与ログはありません。</p>
+          ) : (
+            <table className="rnk-table">
+              <thead>
+                <tr>
+                  <th>通貨</th>
+                  <th>累計付与額</th>
+                  <th>今月付与額</th>
+                  <th>先月付与額</th>
+                  <th>累計件数</th>
+                </tr>
+              </thead>
+              <tbody>
+                {currencyBreakdown.map((item) => (
+                  <tr key={item.currencyCode}>
+                    <td>{item.currencyCode}</td>
+                    <td>{formatMoney(item.totalAmount, item.currencyCode)}</td>
+                    <td>{formatMoney(item.currentMonthAmount, item.currencyCode)}</td>
+                    <td>{formatMoney(item.previousMonthAmount, item.currencyCode)}</td>
+                    <td>{item.totalCount}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </section>
+
+        <section className="rnk-split">
+          <article className="rnk-card">
+            <h2>直近の手動付与</h2>
+            {recentManualGrants.length === 0 ? (
+              <p className="rnk-muted">まだ手動付与ログはありません。</p>
+            ) : (
+              <table className="rnk-table">
+                <thead>
+                  <tr>
+                    <th>日時</th>
+                    <th>顧客</th>
+                    <th>付与額</th>
+                    <th>理由</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {recentManualGrants.map((log) => (
+                    <tr key={log.id}>
+                      <td>{formatDate(log.createdAt)}</td>
+                      <td>{log.customerDisplayName || log.customerEmail}</td>
+                      <td>{formatMoney(Number(log.amount), log.currencyCode)}</td>
+                      <td>{log.reason ?? "未設定"}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </article>
+
+          <article className="rnk-card">
+            <h2>直近の idempotency lock</h2>
+            {recentGrantLocks.length === 0 ? (
+              <p className="rnk-muted">
+                まだ lock はありません。Order paid 自動付与を入れるとここで重複検知の履歴を追えます。
+              </p>
+            ) : (
+              <table className="rnk-table">
+                <thead>
+                  <tr>
+                    <th>作成日時</th>
+                    <th>source</th>
+                    <th>key</th>
+                    <th>status</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {recentGrantLocks.map((lock) => (
+                    <tr key={lock.id}>
+                      <td>{formatDate(lock.createdAt)}</td>
+                      <td>{lock.sourceType}</td>
+                      <td>{lock.key}</td>
+                      <td>{lock.status}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </article>
         </section>
       </div>
     </s-page>

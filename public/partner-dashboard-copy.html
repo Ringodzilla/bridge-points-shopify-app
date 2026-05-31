@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>BridgePoint Partner Dashboard Copy</title>
+    <style>
+      body { font-family: -apple-system, BlinkMacSystemFont, "Hiragino Sans", "Yu Gothic", sans-serif; margin: 0; padding: 40px 20px; background: #f7f8fc; color: #1f1730; }
+      main { max-width: 980px; margin: 0 auto; background: white; border-radius: 20px; padding: 32px; box-shadow: 0 20px 60px rgba(31, 23, 48, 0.08); }
+      h1, h2, h3 { margin-top: 0; }
+      h2 { margin-top: 32px; }
+      p, li, td, th { line-height: 1.8; }
+      ul { padding-left: 20px; }
+      pre { white-space: pre-wrap; background: #f7f8fc; padding: 16px; border-radius: 14px; overflow: auto; }
+      table { width: 100%; border-collapse: collapse; margin-top: 16px; }
+      th, td { border-top: 1px solid #e4e7f2; padding: 12px; text-align: left; vertical-align: top; }
+      .muted { color: #625875; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>BridgePoint Partner Dashboard 入力ドラフト</h1>
+      <p class="muted">Last updated: 2026-05-16</p>
+
+      <h2>Protected customer data request</h2>
+      <p class="muted">Path: Apps &gt; BridgePoint &gt; API access requests &gt; Protected customer data access &gt; Request access</p>
+      <ul>
+        <li>Protected customer data</li>
+        <li>Customer object / customer-linked records needed for Store Credit workflows</li>
+        <li>Protected customer fields: Name, Email</li>
+        <li>Do not request Address or Phone for v1</li>
+      </ul>
+      <pre>BridgePoint needs limited customer-linked data to show Shopify Store Credit balances and recent transaction history inside Shopify admin, let merchants manually grant store credit from the customer details page, and process order-paid automatic grants. BridgePoint uses Shopify Store Credit as the source of truth and stores only the minimum supporting settings, manual grant logs, and duplicate-execution keys needed to operate safely.</pre>
+
+      <h2>Data protection details</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>項目</th>
+            <th>推奨回答</th>
+            <th>前提 / 補足</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr><td>必要最小限の個人データを処理していますか？</td><td>Yes</td><td>Store Credit を Shopify 正本に寄せ、アプリ DB には設定・補助ログ・重複防止キーのみ保持する前提。</td></tr>
+          <tr><td>処理する個人データと目的をマーチャントへ伝えていますか？</td><td>Yes</td><td>Privacy Policy と listing の説明文を公開している前提。</td></tr>
+          <tr><td>個人データの使用をその目的に限定していますか？</td><td>Yes</td><td>残高表示、付与処理、自動付与、ログ、サポートに限定。</td></tr>
+          <tr><td>プライバシー / データ保護に関する契約がありますか？</td><td>Yes</td><td>Terms of Service / Privacy Policy を listing から参照できる前提。</td></tr>
+          <tr><td>同意に関する意思決定を尊重しますか？</td><td>Yes</td><td>BridgePoint 自体は独自マーケティング配信を行わない。</td></tr>
+          <tr><td>データ売却オプトアウトを尊重しますか？</td><td>N/A</td><td>個人データの売却を行わない。</td></tr>
+          <tr><td>重大な自動意思決定のオプトアウトが必要ですか？</td><td>N/A</td><td>法的または重大な影響を及ぼす自動意思決定は行わない。</td></tr>
+          <tr><td>保管期間を定めていますか？</td><td>Yes</td><td>Retention policy を採用する前提。</td></tr>
+          <tr><td>保存時 / 転送時の暗号化をしていますか？</td><td>Yes</td><td>本番環境で TLS と DB / backup 暗号化を使う前提。</td></tr>
+          <tr><td>テストデータと本番環境データを分けていますか？</td><td>Yes</td><td>dev / test / prod を分離運用する前提。</td></tr>
+          <tr><td>データ損失防止策がありますか？</td><td>Yes</td><td>バックアップと restore 手順を持つ前提。</td></tr>
+          <tr><td>スタッフのアクセスを制限していますか？</td><td>Yes</td><td>必要最小限の運用者だけが production にアクセスする前提。</td></tr>
+          <tr><td>強力なパスワード / MFA を要求していますか？</td><td>Yes</td><td>GitHub / hosting / DB / Shopify Partner Dashboard で MFA を前提。</td></tr>
+          <tr><td>個人データへのアクセスを記録していますか？</td><td>Yes</td><td>provider audit logs を有効にする前提。</td></tr>
+          <tr><td>インシデント対応ポリシーがありますか？</td><td>Yes</td><td>incident response policy を採用する前提。</td></tr>
+        </tbody>
+      </table>
+
+      <h2>Operational summary</h2>
+      <pre>BridgePoint uses Shopify Store Credit as the source of truth for balances and stores only the minimum supporting settings, logs, and duplicate-execution keys needed to operate safely. Customer-linked data is processed only to display balances, show recent transaction history, grant store credit from Shopify admin, prevent duplicate grant execution, and support merchant-facing billing and troubleshooting. Production deployments must use HTTPS/TLS, separate production and test environments, restricted operator access, encrypted backups, and provider audit logs.</pre>
+
+      <h2>Submission status</h2>
+      <p>As of 2026-05-16, local code and configuration are ready for this Partner Dashboard step. Browser-side submission in Partner Dashboard still needs to be completed by an authenticated app owner.</p>
+    </main>
+  </body>
+</html>

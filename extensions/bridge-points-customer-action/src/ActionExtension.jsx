@@ -9,6 +9,13 @@ const DEFAULT_FORM = {
   reason: "移行対応の特別ポイント付与",
 };
 
+function buildDefaultForm(summary) {
+  return {
+    ...DEFAULT_FORM,
+    expiresInDays: String(summary?.settings?.manualDefaultExpiryDays ?? DEFAULT_FORM.expiresInDays),
+  };
+}
+
 export default async () => {
   render(<Extension />, document.body);
 };
@@ -28,11 +35,17 @@ function formatMoney(money) {
 async function fetchCustomerSummary(customerId) {
   const response = await fetch(
     `/api/customer-details/store-credit-summary?customerId=${encodeURIComponent(customerId)}`,
+    {},
   );
-  const json = await response.json();
+  let json = null;
+  try {
+    json = await response.json();
+  } catch {
+    json = null;
+  }
 
   if (!response.ok) {
-    throw new Error(json.error || "顧客の Store Credit 情報を取得できませんでした。");
+    throw new Error(json?.error || "顧客の Store Credit 情報を取得できませんでした。");
   }
 
   return json;
@@ -46,7 +59,12 @@ async function submitManualGrant(payload) {
     },
     body: JSON.stringify(payload),
   });
-  const json = await response.json();
+  let json = null;
+  try {
+    json = await response.json();
+  } catch {
+    json = null;
+  }
 
   if (!response.ok) {
     const errorMessage = json.errors
@@ -56,6 +74,18 @@ async function submitManualGrant(payload) {
   }
 
   return json;
+}
+
+function toReadableError(error, fallbackMessage) {
+  if (error instanceof Error && /failed to fetch/i.test(error.message)) {
+    return "BridgePoint バックエンドへ接続できませんでした。`npm run dev:bridge` の起動状態を確認してください。";
+  }
+
+  if (error instanceof Error) {
+    return error.message;
+  }
+
+  return fallbackMessage;
 }
 
 function Extension() {
@@ -90,17 +120,18 @@ function Extension() {
         }
 
         setSummary(nextSummary);
+        setForm((current) => ({
+          ...buildDefaultForm(nextSummary),
+          amount: current.amount,
+          reason: current.reason,
+        }));
       } catch (fetchError) {
         if (!mounted) {
           return;
         }
 
         setSummary(null);
-        setError(
-          fetchError instanceof Error
-            ? fetchError.message
-            : "顧客の Store Credit 情報を取得できませんでした。",
-        );
+        setError(toReadableError(fetchError, "顧客の Store Credit 情報を取得できませんでした。"));
       } finally {
         if (mounted) {
           setLoading(false);
@@ -113,7 +144,11 @@ function Extension() {
     };
   }, [customerId]);
 
-  const currencyCode = summary?.account?.balance?.currencyCode ?? summary?.shopCurrency ?? "JPY";
+  const currencyCode =
+    summary?.grantCurrencyCode ??
+    summary?.account?.balance?.currencyCode ??
+    summary?.shopCurrency ??
+    "JPY";
 
   async function handleSubmit() {
     if (!customerId) {
@@ -139,20 +174,16 @@ function Extension() {
 
       const refreshedSummary = await fetchCustomerSummary(customerId);
       setSummary(refreshedSummary);
-      setForm(DEFAULT_FORM);
+      setForm(buildDefaultForm(refreshedSummary));
     } catch (submitError) {
-      setError(
-        submitError instanceof Error
-          ? submitError.message
-          : "Store Credit の付与に失敗しました。",
-      );
+      setError(toReadableError(submitError, "Store Credit の付与に失敗しました。"));
     } finally {
       setSubmitting(false);
     }
   }
 
   return (
-    <s-admin-action heading="Bridge Points 特別付与">
+    <s-admin-action heading="BridgePoint 特別付与">
       <s-stack direction="block">
         <s-text type="strong">顧客へ特別ポイントを付与</s-text>
 
@@ -169,6 +200,10 @@ function Extension() {
               {summary.account
                 ? formatMoney(summary.account.balance)
                 : formatMoney({ amount: "0", currencyCode })}
+            </s-text>
+            <s-text>付与通貨設定: {currencyCode}</s-text>
+            <s-text>
+              手動付与の既定期限: {summary.settings?.manualDefaultExpiryDays ?? DEFAULT_FORM.expiresInDays} 日
             </s-text>
           </>
         ) : null}
@@ -221,21 +256,10 @@ function Extension() {
           }
         />
 
-        <s-checkbox
-          id="bridge-points-grant-notify"
-          checked={form.notifyCustomer}
-          label="顧客へ通知する"
-          onChange={(event) =>
-            setForm((current) => ({
-              ...current,
-              notifyCustomer: event.currentTarget.checked,
-            }))
-          }
-        />
-
         <s-text>
-          この操作は Shopify Store Credit に credit transaction を追加し、Bridge Points の手動付与ログにも残します。
+          この操作は Shopify Store Credit に credit transaction を追加し、BridgePoint の手動付与ログにも残します。
         </s-text>
+        <s-text>顧客通知メールは Shopify Store Credit API の制約により v1 では未対応です。</s-text>
       </s-stack>
 
       <s-button

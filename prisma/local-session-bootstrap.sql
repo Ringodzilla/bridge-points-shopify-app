@@ -18,61 +18,12 @@ CREATE TABLE IF NOT EXISTS "Session" (
     "refreshTokenExpires" DATETIME
 );
 
-CREATE TABLE IF NOT EXISTS "InviteJob" (
-    "id" TEXT NOT NULL PRIMARY KEY,
-    "shop" TEXT NOT NULL,
-    "name" TEXT NOT NULL,
-    "subject" TEXT NOT NULL,
-    "body" TEXT NOT NULL,
-    "customMessage" TEXT,
-    "from" TEXT,
-    "tagInput" TEXT,
-    "emailFilter" TEXT NOT NULL DEFAULT 'present',
-    "purchaseFilter" TEXT NOT NULL DEFAULT 'all',
-    "purchasedAfter" TEXT,
-    "segmentQuery" TEXT,
-    "previewCount" INTEGER NOT NULL DEFAULT 0,
-    "previewPrecision" TEXT NOT NULL DEFAULT 'NONE',
-    "previewCustomersJson" TEXT,
-    "nextCursor" TEXT,
-    "status" TEXT NOT NULL DEFAULT 'draft',
-    "queuedAt" DATETIME,
-    "startedAt" DATETIME,
-    "completedAt" DATETIME,
-    "lastError" TEXT,
-    "attemptedCount" INTEGER NOT NULL DEFAULT 0,
-    "successCount" INTEGER NOT NULL DEFAULT 0,
-    "failureCount" INTEGER NOT NULL DEFAULT 0,
-    "billedCount" INTEGER NOT NULL DEFAULT 0,
-    "lastBillingError" TEXT,
-    "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    "updatedAt" DATETIME NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS "InviteDelivery" (
-    "id" TEXT NOT NULL PRIMARY KEY,
-    "jobId" TEXT NOT NULL,
-    "shop" TEXT NOT NULL,
-    "customerId" TEXT NOT NULL,
-    "displayName" TEXT,
-    "email" TEXT,
-    "status" TEXT NOT NULL DEFAULT 'queued',
-    "errorMessage" TEXT,
-    "processedAt" DATETIME,
-    "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    "updatedAt" DATETIME NOT NULL,
-    FOREIGN KEY ("jobId") REFERENCES "InviteJob" ("id") ON DELETE CASCADE ON UPDATE CASCADE
-);
-
-CREATE INDEX IF NOT EXISTS "InviteJob_shop_createdAt_idx" ON "InviteJob"("shop", "createdAt");
-CREATE UNIQUE INDEX IF NOT EXISTS "InviteDelivery_jobId_customerId_key" ON "InviteDelivery"("jobId", "customerId");
-CREATE INDEX IF NOT EXISTS "InviteDelivery_jobId_status_idx" ON "InviteDelivery"("jobId", "status");
-
 CREATE TABLE IF NOT EXISTS "ShopSettings" (
     "shop" TEXT NOT NULL PRIMARY KEY,
     "autoGrantEnabled" BOOLEAN NOT NULL DEFAULT true,
     "grantRateNumerator" INTEGER NOT NULL DEFAULT 1,
     "grantRateDenominator" INTEGER NOT NULL DEFAULT 100,
+    "defaultGrantCurrencyCode" TEXT,
     "defaultExpiryDays" INTEGER NOT NULL DEFAULT 365,
     "manualDefaultExpiryDays" INTEGER NOT NULL DEFAULT 365,
     "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -99,3 +50,19 @@ CREATE TABLE IF NOT EXISTS "ManualGrantLog" (
 
 CREATE INDEX IF NOT EXISTS "ManualGrantLog_shop_createdAt_idx" ON "ManualGrantLog"("shop", "createdAt");
 CREATE INDEX IF NOT EXISTS "ManualGrantLog_customerId_createdAt_idx" ON "ManualGrantLog"("customerId", "createdAt");
+
+CREATE TABLE IF NOT EXISTS "GrantExecutionLock" (
+    "id" TEXT NOT NULL PRIMARY KEY,
+    "shop" TEXT NOT NULL,
+    "key" TEXT NOT NULL,
+    "sourceType" TEXT NOT NULL,
+    "sourceId" TEXT,
+    "status" TEXT NOT NULL DEFAULT 'pending',
+    "payloadJson" TEXT,
+    "processedAt" DATETIME,
+    "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" DATETIME NOT NULL
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS "GrantExecutionLock_shop_key_key" ON "GrantExecutionLock"("shop", "key");
+CREATE INDEX IF NOT EXISTS "GrantExecutionLock_shop_sourceType_createdAt_idx" ON "GrantExecutionLock"("shop", "sourceType", "createdAt");

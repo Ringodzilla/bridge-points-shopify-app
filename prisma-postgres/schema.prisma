@@ -1,0 +1,78 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+model Session {
+  id                  String    @id
+  shop                String
+  state               String
+  isOnline            Boolean   @default(false)
+  scope               String?
+  expires             DateTime?
+  accessToken         String
+  userId              BigInt?
+  firstName           String?
+  lastName            String?
+  email               String?
+  accountOwner        Boolean   @default(false)
+  locale              String?
+  collaborator        Boolean?  @default(false)
+  emailVerified       Boolean?  @default(false)
+  refreshToken        String?
+  refreshTokenExpires DateTime?
+}
+
+model ShopSettings {
+  shop                     String   @id
+  autoGrantEnabled         Boolean  @default(true)
+  grantRateNumerator       Int      @default(1)
+  grantRateDenominator     Int      @default(100)
+  defaultGrantCurrencyCode String?
+  defaultExpiryDays        Int      @default(365)
+  manualDefaultExpiryDays  Int      @default(365)
+  createdAt                DateTime @default(now())
+  updatedAt                DateTime @updatedAt
+}
+
+model ManualGrantLog {
+  id                   String    @id @default(cuid())
+  shop                 String
+  customerId           String
+  customerEmail        String
+  customerDisplayName  String?
+  amount               String
+  currencyCode         String
+  expiresAt            DateTime?
+  notifyCustomer       Boolean   @default(false)
+  reason               String?
+  storeCreditAccountId String?
+  storeCreditTxnId     String?
+  balanceAfterAmount   String?
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
+
+  @@index([shop, createdAt])
+  @@index([customerId, createdAt])
+}
+
+model GrantExecutionLock {
+  id          String    @id @default(cuid())
+  shop        String
+  key         String
+  sourceType  String
+  sourceId    String?
+  status      String    @default("pending")
+  payloadJson String?
+  processedAt DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@unique([shop, key])
+  @@index([shop, sourceType, createdAt])
+}

@@ -1,10 +1,9 @@
-# Bridge Points 技術設計書
+# BridgePoint 技術設計書
 
 ## 1. 現状と方針
 
-- 現在のコードベースは `一括招待くん` 用の spike が残っている
-- `customerSendAccountInviteEmail` は legacy customer accounts 前提であり、新規ストアでは前提が崩れる
-- Bridge Points では Store Credit を正本に寄せ、現行 Shopify に素直に乗る
+- 過去実験の route / schema / billing scaffolding は撤去済み
+- BridgePoint では Store Credit を正本に寄せ、現行 Shopify に素直に乗る
 
 設計方針:
 
@@ -92,10 +91,19 @@
 - 自動付与 ON/OFF
 - 付与率
 - 付与基準金額
+- 付与通貨コード
 - デフォルト有効期限日数
 - 手動付与デフォルト期限
 - ウェルカム付与 ON/OFF
 - タグ起点付与 ON/OFF
+
+通貨方針:
+
+- v1 は `手動付与通貨` と `自動付与通貨` を分けて考える
+- 手動付与通貨は ShopSettings で 1 ショップ 1 つ選べるようにする
+- `Order paid` 自動付与通貨は常に `shop currency` と同一に固定する
+- 手動付与 API / Flow には常に明示的な `currencyCode` を渡す
+- 将来の複数通貨対応を考慮し、顧客詳細と KPI は通貨別に扱える構造にする
 
 ## 3.3 顧客詳細ブロック `admin.customer-details.block.render`
 
@@ -141,12 +149,13 @@
     - `id`
     - `creditInput.creditAmount`
     - `creditInput.expiresAt`
-    - `creditInput.notify`
+    - `creditInput.creditAmount.currencyCode`
 
 補足:
 
 - `id` には customer ID も渡せる
 - 対象通貨の account が無ければ自動作成される
+- 付与通貨は API 呼び出し側で明示的に決める
 
 ### 顧客別残高取得
 
@@ -154,6 +163,11 @@
   - 用途: 顧客詳細表示
 - `storeCreditAccount(id)`
   - 用途: balance / transactions / expirable credit 取得
+
+通貨に関する注意:
+
+- 顧客は通貨別に複数の Store Credit account を持ちうる
+- v1 の顧客詳細では「先頭 account 1 件」ではなく、対象通貨を明示して表示する
 
 ### 顧客別履歴取得
 
@@ -181,6 +195,9 @@
   - 現在設定の表示
 - `POST /app/settings`
   - 設定保存
+- `GET /app/flow-setup`
+  - Order paid 向け Flow テンプレート表示
+  - 現在設定値から mutation / inputs を生成
 
 ### 顧客向け補助 API
 
@@ -202,7 +219,6 @@
 
 ## 4.3 現時点で使わない API
 
-- `customerSendAccountInviteEmail`
 - 独自残高管理用 metafield API
 - 顧客向けフロント独自認証 API
 
@@ -230,6 +246,7 @@ v1 の推奨実装:
 
 - 二重付与防止は order metafield を最小限で使う
 - 残高そのものの正本には一切使わない
+- v1 では、Flow で使う付与通貨は shop currency と一致させる
 
 理由:
 
@@ -299,6 +316,7 @@ v1 の推奨実装:
 - `autoGrantEnabled`
 - `grantRateNumerator`
 - `grantRateDenominator`
+- `defaultGrantCurrencyCode`
 - `baseAmountMode`
 - `defaultExpiryDays`
 - `manualDefaultExpiryDays`
@@ -323,6 +341,18 @@ v1 の推奨実装:
 - `storeCreditTransactionId`
 - `createdAt`
 
+### `GrantExecutionLock`
+
+- `id`
+- `shop`
+- `key`
+- `sourceType`
+- `sourceId`
+- `status`
+- `payloadJson`
+- `processedAt`
+- `createdAt`
+
 ### `AppEventLog`
 
 - `id`
@@ -342,16 +372,9 @@ v1 の推奨実装:
 - `tagFlowEnabled`
 - `updatedAt`
 
-## 6.3 現行 spike からの整理
+## 6.3 過去実験から再利用したもの
 
-削除または置換対象:
-
-- `InviteJob`
-- `InviteDelivery`
-- 招待文面関連ロジック
-- 招待用 usage billing 文言
-
-再利用するもの:
+再利用済み:
 
 - Shopify app skeleton
 - Prisma session storage
@@ -368,17 +391,51 @@ v1 の推奨実装:
 - `read_store_credit_account_transactions`
 - `write_store_credit_account_transactions`
 
-追加は後回し:
-
-- `read_orders`
-  - アプリ自身が注文情報を直接照会する設計に寄せる時だけ検討
-
 ## 7.2 staff permissions
 
 - 顧客の Store Credit 残高閲覧
 - transaction history 閲覧
 - 手動付与実行
 - 設定変更
+
+## 7.3 billing 方針
+
+課金モデル:
+
+- `Free`
+  - 月額 `$0`
+  - 月間注文数 `100` 件まで含む
+  - `101` 件目以降は `$0.10 / 件`
+  - usage cap は `$100`
+- `Advanced`
+  - 月額 `$9`
+  - 月間注文数 `500` 件まで含む
+  - `501` 件目以降は `$0.10 / 件`
+  - usage cap は `$100`
+- `Premium`
+  - 月額 `$19`
+  - 月間注文数 `1000` 件まで含む
+  - `1001` 件目以降は `$0.10 / 件`
+  - usage cap は `$100`
+- `Unlimited`
+  - 月額 `$39`
+  - 月間注文数は無制限
+  - overage なし
+
+課金メーター:
+
+- 課金対象は `Order paid` 自動付与で処理した月間注文数とする
+- 手動付与は billing 対象外
+- 同一注文は 1 回だけ課金対象に数える
+- カウントの正本は `GrantExecutionLock(sourceType=order_paid, status=processed)` を使う
+
+merchant への見せ方:
+
+- 現在プラン
+- 現在 billing cycle の処理件数
+- 30 日換算の見込み件数
+- このままの月額見込み
+- 「このままだとどのプランの方が安いか」の推奨
 
 ## 8. KPI 集計方針
 
@@ -400,6 +457,11 @@ v1 の推奨実装:
 - 必要最小限の app 側集計
 
 ## 8.3 v1 の現実的な実装
+
+- app home ではまず `ManualGrantLog` 由来の KPI を出す
+- 金額は通貨を混ぜず、通貨別に累計 / 今月 / 先月を表示する
+- `GrantExecutionLock` を追加して、将来の order paid 自動付与で二重付与防止キーを永続化できるようにする
+- billing meter も `GrantExecutionLock` を使って order paid の処理件数を集計する
 
 - まずは表示時集計を優先する
 - 重くなったら日次スナップショットを追加する
@@ -428,22 +490,22 @@ v1 の推奨実装:
 - 同一注文再試行で二重付与されない
 - `expiresAt` 付き credit が生成される
 
-## 10. 実装優先順位
+## 10. 現在の到達点
 
-1. Store Credit 付与 mutation 実装
-2. Order paid 起点の Flow 自動付与
-3. 顧客詳細 block で残高表示
-4. 顧客詳細 action で手動付与
-5. App Home の KPI ダッシュボード
-6. 失効予定表示
-7. ログ / 監視 / 再実行
+1. Store Credit 手動付与
+2. 顧客詳細 block / action
+3. App Home の KPI ダッシュボード
+4. `orders/paid` webhook 起点の自動付与
+5. `GrantExecutionLock` による二重付与防止
+6. 4 プラン billing と overage usage record
+7. 公開用の legal / release readiness 導線
 
 ## 11. 既知のリスク
 
-- Flow 単独運用では、アプリ DB への厳密な自動付与ログ同期が弱い
-- 二重付与防止を app DB ではなく order metafield に寄せる設計判断が必要
+- Flow テンプレート画面は残しているが、自動付与の正本は `orders/paid` webhook なので二重管理に注意が必要
+- shop currency と異なる付与通貨を Flow で扱う場合、換算ロジックが別途必要
 - 返品 / キャンセルの自動調整は v1 外のため、運用ルールが必要
-- 現行コードはまだ invite 前提のままなので、実装フェーズで route / schema / billing を整理し直す必要がある
+- Protected customer data review と本番ホスティングは repo 外作業なので、公開判断は Partner Dashboard 側の完了待ちになる
 
 ## 12. 参考にした Shopify 公式情報
 

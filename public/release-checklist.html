@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>BridgePoint Release Checklist</title>
+    <style>
+      body { font-family: -apple-system, BlinkMacSystemFont, "Hiragino Sans", "Yu Gothic", sans-serif; margin: 0; padding: 40px 20px; background: #f7f8fc; color: #1f1730; }
+      main { max-width: 860px; margin: 0 auto; background: white; border-radius: 20px; padding: 32px; box-shadow: 0 20px 60px rgba(31, 23, 48, 0.08); }
+      h1, h2 { margin-top: 0; }
+      h2 { margin-top: 32px; }
+      p, li { line-height: 1.8; }
+      ul { padding-left: 20px; }
+      .muted { color: #625875; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>BridgePoint Release Checklist</h1>
+      <p class="muted">Last updated: 2026-05-16</p>
+
+      <h2>Repo and product readiness</h2>
+      <ul>
+        <li>Manual grant flow verified</li>
+        <li>Customer details block and action verified</li>
+        <li>Settings and KPI dashboard available</li>
+        <li>orders/paid webhook auto-grant verified</li>
+        <li>Duplicate grant prevention verified</li>
+        <li>Four billing plans added: Free, Advanced, Premium, Unlimited</li>
+        <li>Billing UI aligned to monthly processed order tiers and overage</li>
+        <li>Subscription and usage overage verified in a dev store</li>
+        <li>Flow setup screen and simulation available</li>
+        <li>Legal and data protection pages published</li>
+        <li>Privacy and compliance webhooks implemented for export, customer redact, and shop delete</li>
+        <li>Billing gate blocks unpaid shops before operational flows run</li>
+        <li>Shopify API version aligned to the stable 2026-04 release</li>
+        <li>Release precheck command added for production env and Partner Dashboard values</li>
+        <li>Partner Dashboard and listing copy drafts prepared</li>
+      </ul>
+
+      <h2>Production environment</h2>
+      <ul>
+        <li>Fly.io credit card must be added immediately before final production deploy so trial account runtime limits do not stop the app</li>
+        <li>Stable production domain with valid TLS must return 200 before submission</li>
+        <li>Production database is prepared; Fly.io secrets must be imported after the trial limit is lifted</li>
+        <li>Supabase direct connection used for v1 stability; pooled connection deferred until verified</li>
+        <li>As of 2026-05-16, Fly.io trial limit is still blocking status/secrets/deploy and the public URL returns 502</li>
+        <li>Preview/dev URLs are not used in merchant-facing production flows</li>
+      </ul>
+
+      <h2>Partner Dashboard and review</h2>
+      <ul>
+        <li>App name, branding, and listing updated to BridgePoint</li>
+        <li>App URL set to https://bridgepoint-shopify-app.fly.dev</li>
+        <li>Redirect URL set to https://bridgepoint-shopify-app.fly.dev/auth/callback</li>
+        <li>Shopify app config deployed with the production URL; bridgepoint-3 released on 2026-05-10</li>
+        <li>Pricing must be mirrored in Partner Dashboard: Free, Advanced $9, Premium $19, Unlimited $39, with $0.10 overage and $100 cap on limited plans</li>
+        <li>Protected customer data request still needs browser-side Partner Dashboard submission</li>
+        <li>Data protection details still need browser-side Partner Dashboard submission</li>
+        <li>Draft copy is ready in repository docs and still needs to be transferred into Partner Dashboard fields</li>
+        <li>Review credentials and screencast still need to be finalized</li>
+      </ul>
+
+      <h2>Final validation</h2>
+      <ul>
+        <li>OAuth must be confirmed through the production URL</li>
+        <li>Embedded app onboarding must be confirmed on production URL</li>
+        <li>Manual grant smoke test must be completed through production</li>
+        <li>orders/paid webhook smoke test must be completed through production</li>
+        <li>Policy URLs must be added to listing and review submission</li>
+        <li>Usage records must begin accruing only when a limited tier exceeds its included monthly processed orders in production mode</li>
+      </ul>
+    </main>
+  </body>
+</html>

@@ -1,16 +1,15 @@
 # Learn more about configuring your app at https://shopify.dev/docs/apps/tools/cli/configuration
 
 client_id = "859d2e243816f65e9155e789b6715f51"
-name = "BulkInviteKun"
-application_url = "https://shopify.dev/apps/default-app-home"
+name = "BridgePoint"
+application_url = "https://bridgepoint-shopify-app.fly.dev"
 embedded = true
 
 [build]
 automatically_update_urls_on_dev = true
-include_config_on_deploy = true
 
 [webhooks]
-api_version = "2026-07"
+api_version = "2026-04"
 
   [[webhooks.subscriptions]]
   topics = [ "app/uninstalled" ]
@@ -19,6 +18,10 @@ api_version = "2026-07"
   [[webhooks.subscriptions]]
   topics = [ "app/scopes_update" ]
   uri = "/webhooks/app/scopes_update"
+
+  [[webhooks.subscriptions]]
+  topics = [ "orders/paid" ]
+  uri = "/webhooks/orders/paid"
 
   [[webhooks.subscriptions]]
   uri = "/webhooks/customers/data_request"
@@ -34,7 +37,7 @@ api_version = "2026-07"
 
 [access_scopes]
 # Learn more at https://shopify.dev/docs/apps/tools/cli/configuration#access_scopes
-scopes = "read_customers,read_store_credit_accounts,read_store_credit_account_transactions,write_store_credit_account_transactions"
+scopes = "read_customers,read_orders,read_store_credit_accounts,read_store_credit_account_transactions,write_store_credit_account_transactions"
 
 [auth]
-redirect_urls = [ "https://shopify.dev/apps/default-app-home/api/auth" ]
+redirect_urls = [ "https://bridgepoint-shopify-app.fly.dev/auth/callback" ]

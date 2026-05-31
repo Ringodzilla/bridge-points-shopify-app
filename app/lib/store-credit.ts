@@ -4,7 +4,7 @@ export const DEFAULT_MANUAL_GRANT_FORM = {
   customerEmail: "",
   amount: "100",
   expiresInDays: String(DEFAULT_MANUAL_EXPIRY_DAYS),
-  notifyCustomer: true,
+  notifyCustomer: false,
   reason: "移行対応の特別ポイント付与",
 };
 

@@ -1,10 +1,22 @@
 import type { ActionFunctionArgs } from "react-router";
+import { collectCustomerPrivacyData } from "../lib/privacy.server";
 import { authenticate } from "../shopify.server";
 
 export const action = async ({ request }: ActionFunctionArgs) => {
-  const { topic, shop } = await authenticate.webhook(request);
-  console.log(`Received ${topic} compliance webhook for ${shop}`);
+  const { topic, shop, payload } = await authenticate.webhook(request);
+  const data = await collectCustomerPrivacyData({
+    shop,
+    payload: payload ?? {},
+  });
 
-  // TODO: 実データ保存を始めたら、顧客データのエクスポート処理をここへ実装する。
-  return new Response();
+  console.log(`Received ${topic} compliance webhook for ${shop}`, {
+    manualGrantLogCount: data.manualGrantLogs.length,
+    grantExecutionLockCount: data.grantExecutionLocks.length,
+  });
+
+  return Response.json({
+    ok: true,
+    shop,
+    data,
+  });
 };

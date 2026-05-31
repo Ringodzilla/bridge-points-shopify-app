@@ -48,14 +48,32 @@ function formatTransactionType(type) {
 async function fetchCustomerSummary(customerId) {
   const response = await fetch(
     `/api/customer-details/store-credit-summary?customerId=${encodeURIComponent(customerId)}`,
+    {},
   );
-  const json = await response.json();
+  let json = null;
+  try {
+    json = await response.json();
+  } catch {
+    json = null;
+  }
 
   if (!response.ok) {
-    throw new Error(json.error || "顧客の Store Credit 情報を取得できませんでした。");
+    throw new Error(json?.error || "顧客の Store Credit 情報を取得できませんでした。");
   }
 
   return json;
+}
+
+function toReadableError(error, fallbackMessage) {
+  if (error instanceof Error && /failed to fetch/i.test(error.message)) {
+    return "BridgePoint バックエンドへ接続できませんでした。`npm run dev:bridge` の起動状態を確認してください。";
+  }
+
+  if (error instanceof Error) {
+    return error.message;
+  }
+
+  return fallbackMessage;
 }
 
 function Extension() {
@@ -92,11 +110,7 @@ function Extension() {
         }
 
         setSummary(null);
-        setError(
-          fetchError instanceof Error
-            ? fetchError.message
-            : "顧客の Store Credit 情報を取得できませんでした。",
-        );
+        setError(toReadableError(fetchError, "顧客の Store Credit 情報を取得できませんでした。"));
       } finally {
         if (mounted) {
           setLoading(false);
@@ -109,13 +123,17 @@ function Extension() {
     };
   }, [customerId]);
 
-  const currencyCode = summary?.account?.balance?.currencyCode ?? summary?.shopCurrency ?? "JPY";
+  const currencyCode =
+    summary?.grantCurrencyCode ??
+    summary?.account?.balance?.currencyCode ??
+    summary?.shopCurrency ??
+    "JPY";
   const manualCreditHref = summary?.customer?.email
     ? `/app/manual-credit?customerEmail=${encodeURIComponent(summary.customer.email)}`
     : "/app/manual-credit";
 
   return (
-    <s-admin-block heading="Bridge Points">
+    <s-admin-block heading="BridgePoint">
       <s-stack direction="block">
         <s-text type="strong">顧客ポイント概要</s-text>
 
@@ -151,6 +169,10 @@ function Extension() {
               顧客: {summary.customer.displayName || "名前未設定"} /{" "}
               {summary.customer.email || "メール未設定"}
             </s-text>
+            <s-text>付与通貨設定: {currencyCode}</s-text>
+            <s-text>
+              手動付与の既定期限: {summary.settings?.manualDefaultExpiryDays ?? "365"} 日
+            </s-text>
 
             {summary.recentTransactions.slice(0, 3).map((transaction) => (
               <s-text key={transaction.id}>
@@ -161,7 +183,7 @@ function Extension() {
 
             <s-button href={manualCreditHref}>手動付与ページを開く</s-button>
             <s-text>
-              顧客詳細の More actions にある「Bridge Points 特別付与」から、この顧客へ直接ポイント付与できます。
+              顧客詳細の More actions にある「BridgePoint 特別付与」から、この顧客へ直接ポイント付与できます。
             </s-text>
           </>
         ) : null}

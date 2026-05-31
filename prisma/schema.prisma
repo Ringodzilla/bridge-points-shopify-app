@@ -33,63 +33,12 @@ model Session {
   refreshTokenExpires DateTime?
 }
 
-model InviteJob {
-  id                   String           @id @default(cuid())
-  shop                 String
-  name                 String
-  subject              String
-  body                 String
-  customMessage        String?
-  from                 String?
-  tagInput             String?
-  emailFilter          String           @default("present")
-  purchaseFilter       String           @default("all")
-  purchasedAfter       String?
-  segmentQuery         String?
-  previewCount         Int              @default(0)
-  previewPrecision     String           @default("NONE")
-  previewCustomersJson String?
-  nextCursor           String?
-  status               String           @default("draft")
-  queuedAt             DateTime?
-  startedAt            DateTime?
-  completedAt          DateTime?
-  lastError            String?
-  attemptedCount       Int              @default(0)
-  successCount         Int              @default(0)
-  failureCount         Int              @default(0)
-  billedCount          Int              @default(0)
-  lastBillingError     String?
-  createdAt            DateTime         @default(now())
-  updatedAt            DateTime         @updatedAt
-  deliveries           InviteDelivery[]
-
-  @@index([shop, createdAt])
-}
-
-model InviteDelivery {
-  id           String   @id @default(cuid())
-  jobId        String
-  shop         String
-  customerId   String
-  displayName  String?
-  email        String?
-  status       String   @default("queued")
-  errorMessage String?
-  processedAt  DateTime?
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
-  job          InviteJob @relation(fields: [jobId], references: [id], onDelete: Cascade)
-
-  @@unique([jobId, customerId])
-  @@index([jobId, status])
-}
-
 model ShopSettings {
   shop                    String   @id
   autoGrantEnabled        Boolean  @default(true)
   grantRateNumerator      Int      @default(1)
   grantRateDenominator    Int      @default(100)
+  defaultGrantCurrencyCode String?
   defaultExpiryDays       Int      @default(365)
   manualDefaultExpiryDays Int      @default(365)
   createdAt               DateTime @default(now())
@@ -115,4 +64,20 @@ model ManualGrantLog {
 
   @@index([shop, createdAt])
   @@index([customerId, createdAt])
+}
+
+model GrantExecutionLock {
+  id          String   @id @default(cuid())
+  shop        String
+  key         String
+  sourceType  String
+  sourceId    String?
+  status      String   @default("pending")
+  payloadJson String?
+  processedAt DateTime?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@unique([shop, key])
+  @@index([shop, sourceType, createdAt])
 }

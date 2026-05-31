@@ -1,0 +1,142 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>BridgePoint Screencast Script</title>
+    <style>
+      body {
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        margin: 0;
+        padding: 40px 20px;
+        background: #f5f7fb;
+        color: #17212b;
+        line-height: 1.7;
+      }
+      main {
+        max-width: 960px;
+        margin: 0 auto;
+        background: #fff;
+        border: 1px solid #d8e1eb;
+        border-radius: 20px;
+        padding: 32px;
+        box-shadow: 0 12px 40px rgba(23, 33, 43, 0.08);
+      }
+      h1, h2, h3 { color: #0f1720; }
+      h1 { margin-top: 0; }
+      code, pre {
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        background: #f3f4f6;
+      }
+      pre {
+        padding: 16px;
+        border-radius: 12px;
+        overflow-x: auto;
+      }
+      .muted { color: #52606d; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>BridgePoint 審査用 Screencast 台本</h1>
+      <p class="muted">最終更新: 2026-04-29</p>
+
+      <h2>1. 目的</h2>
+      <p>Shopify App Store review 向けに、BridgePoint の主要機能が短時間で伝わる 3〜5 分の動画を収録するための台本です。</p>
+      <ul>
+        <li>Shopify admin に埋め込まれたアプリであること</li>
+        <li>プラン選択ができること</li>
+        <li>customer details block / action が使えること</li>
+        <li>手動付与ができること</li>
+        <li><code>orders/paid</code> 自動付与が動くこと</li>
+        <li>billing meter / usage が確認できること</li>
+      </ul>
+
+      <h2>2. 収録前チェック</h2>
+      <ul>
+        <li><code>npm run dev:bridge</code> が起動している</li>
+        <li>dev store の管理画面から BridgePoint を開ける</li>
+        <li>BridgePoint 表示名が反映済み</li>
+        <li>テスト用 customer が 1 件ある</li>
+        <li>その customer に紐づく paid 注文を 1 件作れる</li>
+        <li>プラン画面で test subscription が承認済み</li>
+        <li>customer details block / action が表示される</li>
+      </ul>
+
+      <h2>3. 推奨動画構成</h2>
+      <ul>
+        <li>目標尺: 3〜5 分</li>
+        <li>BGM なし</li>
+        <li>倍速なし</li>
+        <li>画面録画 + 必要に応じて短い口頭説明</li>
+      </ul>
+
+      <h2>4. 台本</h2>
+      <h3>0:00 - 0:20 導入</h3>
+      <p><strong>画面:</strong> Shopify admin の <code>Apps</code> から <code>BridgePoint</code> を開き、App Home を表示。</p>
+      <p><strong>話す内容:</strong><br />
+      <code>This is BridgePoint, a lightweight points app built on Shopify Store Credit.</code><br />
+      <code>I’ll show the embedded admin workflow, manual grants, order-paid auto grants, and plan-based billing.</code></p>
+
+      <h3>0:20 - 0:50 Settings</h3>
+      <p><strong>画面:</strong> <code>Settings</code> を開き、自動付与設定、手動付与通貨、失効日数を表示。</p>
+      <p><strong>話す内容:</strong><br />
+      <code>BridgePoint lets merchants configure auto grant behavior, manual grant defaults, and currency settings.</code><br />
+      <code>For order-paid auto grants, the app uses the shop currency.</code></p>
+
+      <h3>0:50 - 1:20 Plans</h3>
+      <p><strong>画面:</strong> <code>Plans</code> を開き、現在プラン、月間件数、予測請求、usage 実績を表示。</p>
+      <p><strong>話す内容:</strong><br />
+      <code>Merchants can choose from Free, Advanced, Premium, and Unlimited plans.</code><br />
+      <code>Billing is based on the number of monthly orders processed by BridgePoint auto grants.</code><br />
+      <code>The Plans page shows projected charges and Shopify usage records.</code></p>
+
+      <h3>1:20 - 2:10 Customer details block / action</h3>
+      <p><strong>画面:</strong> 顧客詳細ページを開き、block を表示し、action モーダルを開く。</p>
+      <p><strong>話す内容:</strong><br />
+      <code>BridgePoint adds an embedded customer details block and action inside Shopify admin.</code><br />
+      <code>Staff can review the balance and create a manual grant without leaving the customer page.</code></p>
+
+      <h3>2:10 - 2:50 Manual grant</h3>
+      <p><strong>画面:</strong> action または app 内 manual grant 画面から少額の store credit を付与し、成功メッセージを表示。</p>
+      <p><strong>話す内容:</strong><br />
+      <code>Here is a manual store credit grant with an expiration period.</code><br />
+      <code>BridgePoint records the grant and updates the customer’s Store Credit balance.</code></p>
+
+      <h3>2:50 - 3:50 Order paid auto grant</h3>
+      <p><strong>画面:</strong> 注文一覧または注文詳細を開き、対象 customer の注文を <code>paid</code> にした状態を見せ、その後 customer の Store Credit 画面に戻る。</p>
+      <p><strong>話す内容:</strong><br />
+      <code>BridgePoint also grants credit automatically when an order is paid.</code><br />
+      <code>The app uses duplicate-execution protection so the same order is not granted twice.</code></p>
+
+      <h3>3:50 - 4:30 Dashboard and billing confirmation</h3>
+      <p><strong>画面:</strong> App Home または <code>Plans</code> に戻り、meter / usage / projected billing を確認。</p>
+      <p><strong>話す内容:</strong><br />
+      <code>The dashboard summarizes grant activity, and the Plans page reflects processed order counts and usage billing.</code><br />
+      <code>This helps merchants understand when another plan may be more cost-effective.</code></p>
+
+      <h3>4:30 - 4:45 締め</h3>
+      <p><strong>画面:</strong> BridgePoint Home または Plans の全景。</p>
+      <p><strong>話す内容:</strong><br />
+      <code>That is the end-to-end BridgePoint workflow: embedded admin usage, manual grants, automatic order-paid grants, and plan-aware billing.</code></p>
+
+      <h2>5. 収録時の注意</h2>
+      <ul>
+        <li>customer email や個人情報はテストデータを使う</li>
+        <li>注文番号や金額もレビュー用のテストデータに寄せる</li>
+        <li>1テイクで詰まりそうなら、画面遷移だけ先に確認してから録画する</li>
+        <li><code>trycloudflare</code> URL やローカル事情は動画で強調しない</li>
+        <li>レビュアーが見たいのはアプリ価値と主要導線</li>
+      </ul>
+
+      <h2>6. 動画説明文の短い案</h2>
+      <pre>BridgePoint review screencast covering embedded admin workflow, settings, customer details block/action, manual grants, order-paid auto grants, and plan-based billing.</pre>
+
+      <h2>7. URL 反映タイミング</h2>
+      <ul>
+        <li>Loom / YouTube 限定公開 / Google Drive 共有 URL を発行したら、<code>Screencast URL</code> にそのまま貼る</li>
+        <li>公開後は Partner Dashboard の <code>Screencast URL</code> と listing 用メモを同じ URL に揃える</li>
+      </ul>
+    </main>
+  </body>
+</html>

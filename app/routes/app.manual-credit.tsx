@@ -7,12 +7,16 @@ import {
   useSearchParams,
 } from "react-router";
 import prisma from "../db.server";
+import { getBridgePointsBillingGate } from "../lib/billing.server";
 import {
   buildManualGrantFormValues,
   DEFAULT_MANUAL_GRANT_FORM,
   validateManualGrantForm,
 } from "../lib/store-credit";
-import { getShopCurrency, issueManualStoreCredit } from "../lib/store-credit.server";
+import {
+  getConfiguredGrantCurrencyCode,
+  issueManualStoreCredit,
+} from "../lib/store-credit.server";
 import { authenticate } from "../shopify.server";
 
 function formatDate(value: string | null) {
@@ -32,21 +36,33 @@ function formatDate(value: string | null) {
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { admin, session } = await authenticate.admin(request);
   const url = new URL(request.url);
-  const initialValues = buildManualGrantFormValues({
-    customerEmail: url.searchParams.get("customerEmail") ?? DEFAULT_MANUAL_GRANT_FORM.customerEmail,
-  });
-  const [shopCurrency, recentLogs] = await Promise.all([
-    getShopCurrency(admin),
+  const [currencySettings, recentLogs] = await Promise.all([
+    getConfiguredGrantCurrencyCode({
+      admin,
+      shop: session.shop,
+    }),
     prisma.manualGrantLog.findMany({
       where: { shop: session.shop },
       orderBy: { createdAt: "desc" },
       take: 10,
     }),
   ]);
+  const initialValues = buildManualGrantFormValues({
+    customerEmail: url.searchParams.get("customerEmail") ?? DEFAULT_MANUAL_GRANT_FORM.customerEmail,
+    expiresInDays: String(currencySettings.settings.manualDefaultExpiryDays),
+  });
 
   return {
     initialValues,
-    shopCurrency,
+    shopCurrency: currencySettings.shopCurrency,
+    grantCurrencyCode: currencySettings.grantCurrencyCode,
+    settings: {
+      autoGrantEnabled: currencySettings.settings.autoGrantEnabled,
+      grantRateNumerator: currencySettings.settings.grantRateNumerator,
+      grantRateDenominator: currencySettings.settings.grantRateDenominator,
+      defaultExpiryDays: currencySettings.settings.defaultExpiryDays,
+      manualDefaultExpiryDays: currencySettings.settings.manualDefaultExpiryDays,
+    },
     recentLogs: recentLogs.map((log) => ({
       ...log,
       createdAt: log.createdAt.toISOString(),
@@ -56,8 +72,27 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 };
 
 export const action = async ({ request }: ActionFunctionArgs) => {
-  const { admin, session } = await authenticate.admin(request);
-  const shopCurrency = await getShopCurrency(admin);
+  const { admin, billing, session } = await authenticate.admin(request);
+  const gate = await getBridgePointsBillingGate({
+    billing,
+    shop: session.shop,
+  });
+
+  if (!gate.hasActivePayment) {
+    return {
+      errors: {
+        form: "Store Credit を付与するには、先にプランを承認してください。",
+      },
+      values: DEFAULT_MANUAL_GRANT_FORM,
+      shopCurrency: "JPY",
+      grantCurrencyCode: "JPY",
+    };
+  }
+
+  const { shopCurrency, grantCurrencyCode } = await getConfiguredGrantCurrencyCode({
+    admin,
+    shop: session.shop,
+  });
   const formData = await request.formData();
   const values = {
     customerEmail: String(formData.get("customerEmail") || "").trim(),
@@ -73,6 +108,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       errors,
       values,
       shopCurrency,
+      grantCurrencyCode,
     };
   }
 
@@ -82,7 +118,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       shop: session.shop,
       customerEmail: values.customerEmail,
       amount: values.amount,
-      currencyCode: shopCurrency,
+      currencyCode: grantCurrencyCode,
       expiresInDays: Number(values.expiresInDays),
       notifyCustomer: values.notifyCustomer,
       reason: values.reason,
@@ -97,6 +133,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       },
       values,
       shopCurrency,
+      grantCurrencyCode,
     };
   }
 
@@ -106,30 +143,32 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 };
 
 export default function ManualCreditPage() {
-  const { initialValues, shopCurrency, recentLogs } = useLoaderData<typeof loader>();
+  const { initialValues, shopCurrency, grantCurrencyCode, recentLogs, settings } =
+    useLoaderData<typeof loader>();
   const actionData = useActionData<typeof action>();
   const [searchParams] = useSearchParams();
   const values = actionData?.values ?? initialValues;
   const errors = actionData?.errors;
-  const activeCurrency = actionData?.shopCurrency ?? shopCurrency;
+  const activeCurrency = actionData?.grantCurrencyCode ?? grantCurrencyCode;
+  const fallbackShopCurrency = actionData?.shopCurrency ?? shopCurrency;
   const success = searchParams.get("success") === "1";
 
   return (
     <s-page heading="手動ポイント付与">
       <div className="rnk-page">
         <section className="rnk-hero">
-          <span className="rnk-eyebrow">Bridge Points</span>
+          <span className="rnk-eyebrow">BridgePoint</span>
           <h1 className="rnk-title">Store Credit へ、まず 1 件だけ安全に付与できる状態を作る</h1>
           <p className="rnk-subtitle">
             この画面では顧客メールアドレスを起点に Store Credit を手動付与します。
-            Bridge Points の最初の縦切りとして、付与実行、期限設定、通知、実行ログ保存までを先に通します。
+            BridgePoint の最初の縦切りとして、付与実行、期限設定、実行ログ保存までを先に通します。
           </p>
           <div className="rnk-pill-row">
             <span className="rnk-pill" data-tone="success">
-              通貨: {activeCurrency}
+              付与通貨: {activeCurrency}
             </span>
             <span className="rnk-pill" data-tone="neutral">
-              実体は Shopify Store Credit
+              ショップ通貨: {fallbackShopCurrency}
             </span>
           </div>
         </section>
@@ -199,17 +238,9 @@ export default function ManualCreditPage() {
             </label>
           </div>
 
-          <label
-            className="rnk-field"
-            style={{ marginTop: 14, gridTemplateColumns: "auto 1fr", alignItems: "center" }}
-          >
-            <input
-              defaultChecked={values.notifyCustomer}
-              name="notifyCustomer"
-              type="checkbox"
-            />
-            <span className="rnk-label">顧客へ通知する</span>
-          </label>
+          <p className="rnk-muted" style={{ marginTop: 14 }}>
+            顧客通知メールは Shopify Store Credit API の制約により v1 では未対応です。
+          </p>
 
           <div className="rnk-actions" style={{ marginTop: 16 }}>
             <button className="rnk-button" type="submit">
@@ -224,8 +255,9 @@ export default function ManualCreditPage() {
             <ul className="rnk-list">
               <li>顧客メールアドレスから customer を解決できる</li>
               <li>`storeCreditAccountCredit` を使って credit transaction を作成できる</li>
-              <li>`expiresAt` と `notify` を指定して付与できる</li>
+              <li>`expiresAt` を指定して付与できる</li>
               <li>アプリ DB に手動付与ログを残せる</li>
+              <li>手動付与の既定期限は設定画面の {settings.manualDefaultExpiryDays} 日を参照する</li>
             </ul>
           </article>
 
@@ -233,9 +265,10 @@ export default function ManualCreditPage() {
             <h2>まだ未対応のこと</h2>
             <ul className="rnk-list">
               <li>Flow による注文起点の自動付与</li>
-              <li>ストア全体 KPI のリアルタイム集計</li>
+              <li>Store Credit 全体残高まで含むネイティブ KPI 集計</li>
               <li>複数通貨ストア向けの詳細最適化</li>
-              <li>ポイント付与ルールを設定画面から編集すること</li>
+              <li>顧客通知メールの自動送信</li>
+              <li>注文 paid の自動付与本実装</li>
             </ul>
           </article>
         </section>

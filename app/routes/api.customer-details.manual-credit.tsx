@@ -1,16 +1,44 @@
-import type { ActionFunctionArgs } from "react-router";
+import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
 import {
   buildManualGrantFormValues,
   validateManualGrantForm,
 } from "../lib/store-credit";
+import { getBridgePointsBillingGate } from "../lib/billing.server";
 import {
-  getShopCurrency,
+  getConfiguredGrantCurrencyCode,
   issueManualStoreCreditByCustomerId,
 } from "../lib/store-credit.server";
 import { authenticate } from "../shopify.server";
 
+export const loader = async ({ request }: LoaderFunctionArgs) => {
+  const { cors } = await authenticate.admin(request);
+  return cors(
+    Response.json(
+      {
+        error: "POST で実行してください。",
+      },
+      { status: 405 },
+    ),
+  );
+};
+
 export const action = async ({ request }: ActionFunctionArgs) => {
-  const { admin, session, cors } = await authenticate.admin(request);
+  const { admin, billing, session, cors } = await authenticate.admin(request);
+  const gate = await getBridgePointsBillingGate({
+    billing,
+    shop: session.shop,
+  });
+
+  if (!gate.hasActivePayment) {
+    return cors(
+      Response.json(
+        {
+          error: "BridgePoint で Store Credit を付与するには、先にプランを承認してください。",
+        },
+        { status: 402 },
+      ),
+    );
+  }
 
   let payload: Record<string, unknown>;
   try {
@@ -31,7 +59,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     customerEmail: String(payload.customerEmail || "").trim(),
     amount: String(payload.amount || "").trim(),
     expiresInDays: String(payload.expiresInDays || "").trim(),
-    notifyCustomer: payload.notifyCustomer !== false,
+    notifyCustomer: payload.notifyCustomer === true,
     reason: String(payload.reason || "").trim(),
   });
   const errors = validateManualGrantForm(values);
@@ -52,7 +80,10 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     );
   }
 
-  const currencyCode = await getShopCurrency(admin);
+  const { grantCurrencyCode } = await getConfiguredGrantCurrencyCode({
+    admin,
+    shop: session.shop,
+  });
 
   try {
     const { customer, transaction } = await issueManualStoreCreditByCustomerId({
@@ -60,7 +91,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       shop: session.shop,
       customerId,
       amount: values.amount,
-      currencyCode,
+      currencyCode: grantCurrencyCode,
       expiresInDays: Number(values.expiresInDays),
       notifyCustomer: values.notifyCustomer,
       reason: values.reason,
@@ -72,7 +103,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         customer: {
           id: customer.id,
           displayName: customer.displayName,
-          email: customer.defaultEmailAddress?.emailAddress ?? null,
+          email: null,
         },
         transaction: {
           id: transaction.id,
