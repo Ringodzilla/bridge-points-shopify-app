@@ -87,7 +87,7 @@ Production uses HTTPS/TLS, a production Supabase Postgres database separate from
 
 - ShopSettings: アプリ導入中は保持。アンインストール後はサポート・法令対応を除き削除対象。
 - ManualGrantLog: サポート・不正調査・課金照合のため最大 24 か月を目安に保持。
-- GrantExecutionLock: 重複防止と監査のため最大 24 か月を目安に保持。
+- GrantExecutionLock: 重複防止と監査のため 400 日保持。
 - Shopify 由来の正本残高: Shopify Store Credit が正本。BridgePoint 側に独自残高 ledger は持たない。
 
 ## 3. Security / operations summary

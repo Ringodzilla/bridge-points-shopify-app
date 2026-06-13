@@ -1,6 +1,9 @@
 import type { ActionFunctionArgs } from "react-router";
 import { getBridgePointsBillingGate } from "../lib/billing.server";
-import { processOrderPaidGrant } from "../lib/store-credit.server";
+import {
+  ORDER_PAID_TRIGGER_TOPIC,
+  processOrderPaidGrant,
+} from "../lib/store-credit.server";
 import { authenticate } from "../shopify.server";
 
 type OrderPaidWebhookPayload = {
@@ -56,6 +59,16 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     await authenticate.webhook(request);
 
   console.log(`Received ${topic} webhook for ${shop}`, { webhookId });
+
+  if (String(topic ?? "").toLowerCase() !== ORDER_PAID_TRIGGER_TOPIC) {
+    console.log("Skipping webhook because it did not match the single auto-grant trigger.", {
+      shop,
+      webhookId,
+      topic,
+      expectedTopic: ORDER_PAID_TRIGGER_TOPIC,
+    });
+    return new Response();
+  }
 
   if (!session || !admin) {
     console.log("Skipping orders/paid webhook because offline session is unavailable.", {

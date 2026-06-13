@@ -118,6 +118,11 @@ type ManualGrantByCustomerIdRequest = Omit<ManualGrantRequest, "customerEmail"> 
   customerId: string;
 };
 
+export const ORDER_PAID_TRIGGER_TOPIC = "orders/paid";
+const ORDER_PAID_GRANT_RULE_VERSION = "2026-06-v1";
+const ORDER_PAID_LOCK_RETENTION_DAYS = 400;
+const ORDER_PAID_LOCK_PREFIX = "order_paid";
+
 function buildExpiryAt(expiresInDays: number) {
   const expiresAt = new Date();
   expiresAt.setHours(23, 59, 59, 999);
@@ -148,8 +153,47 @@ function normalizePositiveInteger(
   return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
 }
 
-function buildOrderPaidGrantLockKey(orderId: string) {
-  return `order_paid:${orderId.trim()}`;
+function buildOrderPaidGrantLockKey({
+  orderId,
+  ruleVersion = ORDER_PAID_GRANT_RULE_VERSION,
+}: {
+  orderId: string;
+  ruleVersion?: string;
+}) {
+  return `${ORDER_PAID_LOCK_PREFIX}:${ruleVersion}:${orderId.trim()}`;
+}
+
+function extractGraphqlErrorMessage(json: Record<string, unknown>) {
+  const errors = Array.isArray(json.errors) ? json.errors : [];
+  const messages = errors
+    .map((error) =>
+      typeof error === "object" && error && "message" in error
+        ? String(error.message ?? "")
+        : "",
+    )
+    .filter(Boolean);
+
+  return messages[0] ?? "";
+}
+
+function classifyOrderPaidGrantError(message: string): "failed" | "unknown" {
+  const normalized = message.toLowerCase();
+
+  if (
+    normalized.includes("timeout") ||
+    normalized.includes("timed out") ||
+    normalized.includes("network") ||
+    normalized.includes("fetch failed") ||
+    normalized.includes("econnreset") ||
+    normalized.includes("ehostunreach") ||
+    normalized.includes("503") ||
+    normalized.includes("502") ||
+    normalized.includes("500")
+  ) {
+    return "unknown";
+  }
+
+  return "failed";
 }
 
 function calculateOrderPaidGrantAmount({
@@ -204,7 +248,9 @@ async function buildOrderPaidGrantPreview({
     grantRateNumerator: settings.grantRateNumerator,
     grantRateDenominator: settings.grantRateDenominator,
   });
-  const key = buildOrderPaidGrantLockKey(normalizedOrderId);
+  const key = buildOrderPaidGrantLockKey({
+    orderId: normalizedOrderId,
+  });
 
   return {
     normalizedOrderId,
@@ -213,6 +259,9 @@ async function buildOrderPaidGrantPreview({
     settings,
     preview: {
       key,
+      triggerTopic: ORDER_PAID_TRIGGER_TOPIC,
+      grantRuleVersion: ORDER_PAID_GRANT_RULE_VERSION,
+      dedupeRetentionDays: ORDER_PAID_LOCK_RETENTION_DAYS,
       orderId: normalizedOrderId,
       customerId: normalizedCustomerId,
       orderTotalAmount,
@@ -453,6 +502,15 @@ async function creditStoreCreditAccount({
   );
 
   const json = await response.json();
+  const graphqlErrorMessage = extractGraphqlErrorMessage(json);
+
+  if (!response.ok || graphqlErrorMessage) {
+    throw new Error(
+      graphqlErrorMessage ||
+        `Store Credit の付与に失敗しました。(HTTP ${response.status})`,
+    );
+  }
+
   const payload = json.data?.storeCreditAccountCredit;
   const userErrors = payload?.userErrors ?? [];
 
@@ -679,25 +737,9 @@ export async function reserveGrantExecutionLock({
       });
 
       if (existing?.status === "failed") {
-        const retried = await prisma.grantExecutionLock.update({
-          where: {
-            shop_key: {
-              shop,
-              key,
-            },
-          },
-          data: {
-            sourceType,
-            sourceId: sourceId ?? null,
-            status: "pending",
-            payloadJson,
-            processedAt: null,
-          },
-        });
-
         return {
-          created: true,
-          lock: serializeGrantExecutionLock(retried),
+          created: false,
+          lock: serializeGrantExecutionLock(existing),
         };
       }
 
@@ -935,20 +977,25 @@ export async function processOrderPaidGrant({
       error instanceof Error
         ? error.message
         : "Order paid 自動付与中に予期しないエラーが発生しました。";
+    const status = classifyOrderPaidGrantError(message);
 
     const lock = await finalizeGrantExecutionLock({
       shop,
       key: preview.key,
-      status: "failed",
+      status,
       payload: {
         ...preview,
         errorMessage: message,
+        retryDisposition:
+          status === "unknown"
+            ? "do_not_auto_retry_without_manual_reconciliation"
+            : "fix_and_replay_with_new_rule_version",
       },
       processedAt: null,
     });
 
     return {
-      status: "failed" as const,
+      status,
       preview,
       lock,
       transaction: null,
