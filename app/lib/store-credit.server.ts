@@ -23,6 +23,11 @@ type Money = {
   currencyCode: string;
 };
 
+type ShopContext = {
+  shopCurrency: string;
+  shopTimezone: string;
+};
+
 type CustomerMatch = {
   id: string;
   displayName: string | null;
@@ -561,6 +566,26 @@ function normalizeManualGrantAmount(amount: string) {
   return parsed;
 }
 
+function getMonthKeyInTimezone(date: Date, timeZone: string) {
+  const formatter = new Intl.DateTimeFormat("en-CA", {
+    timeZone,
+    year: "numeric",
+    month: "2-digit",
+  });
+  const parts = formatter.formatToParts(date);
+  const year = parts.find((part) => part.type === "year")?.value ?? "1970";
+  const month = parts.find((part) => part.type === "month")?.value ?? "01";
+  return `${year}-${month}`;
+}
+
+function shiftMonthKey(monthKey: string, deltaMonths: number) {
+  const [yearText, monthText] = monthKey.split("-");
+  const year = Number(yearText);
+  const monthIndex = Number(monthText) - 1;
+  const shifted = new Date(Date.UTC(year, monthIndex + deltaMonths, 1));
+  return `${shifted.getUTCFullYear()}-${String(shifted.getUTCMonth() + 1).padStart(2, "0")}`;
+}
+
 function getManualGrantDayRange(now = new Date()) {
   const start = new Date(now);
   start.setUTCHours(0, 0, 0, 0);
@@ -621,12 +646,32 @@ export async function getShopCurrency(admin: AdminGraphqlClient) {
       query BridgePointsShopCurrency {
         shop {
           currencyCode
+          ianaTimezone
         }
       }
     `,
   );
   const json = await response.json();
   return json.data?.shop?.currencyCode ?? "JPY";
+}
+
+export async function getShopContext(admin: AdminGraphqlClient): Promise<ShopContext> {
+  const response = await admin.graphql(
+    `#graphql
+      query BridgePointsShopContext {
+        shop {
+          currencyCode
+          ianaTimezone
+        }
+      }
+    `,
+  );
+  const json = await response.json();
+
+  return {
+    shopCurrency: json.data?.shop?.currencyCode ?? "JPY",
+    shopTimezone: json.data?.shop?.ianaTimezone ?? "UTC",
+  };
 }
 
 export async function getShopSettings({
@@ -690,7 +735,7 @@ export async function getConfiguredGrantCurrencyCode({
   admin: AdminGraphqlClient;
   shop: string;
 }) {
-  const shopCurrency = await getShopCurrency(admin);
+  const { shopCurrency, shopTimezone } = await getShopContext(admin);
   const settings = await getShopSettings({
     shop,
     fallbackGrantCurrencyCode: shopCurrency,
@@ -698,6 +743,7 @@ export async function getConfiguredGrantCurrencyCode({
 
   return {
     shopCurrency,
+    shopTimezone,
     grantCurrencyCode: normalizeCurrencyCode(
       settings.defaultGrantCurrencyCode ?? shopCurrency,
     ),
@@ -1142,10 +1188,11 @@ export async function getShopDashboardSummary({
   admin: AdminGraphqlClient;
   shop: string;
 }) {
-  const { shopCurrency, grantCurrencyCode, settings } = await getConfiguredGrantCurrencyCode({
-    admin,
-    shop,
-  });
+  const { shopCurrency, shopTimezone, grantCurrencyCode, settings } =
+    await getConfiguredGrantCurrencyCode({
+      admin,
+      shop,
+    });
   const [manualGrantLogs, recentGrantLocks] = await Promise.all([
     prisma.manualGrantLog.findMany({
       where: { shop },
@@ -1159,8 +1206,8 @@ export async function getShopDashboardSummary({
   ]);
 
   const now = new Date();
-  const currentMonthStart = new Date(now.getFullYear(), now.getMonth(), 1);
-  const previousMonthStart = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+  const currentMonthKey = getMonthKeyInTimezone(now, shopTimezone);
+  const previousMonthKey = shiftMonthKey(currentMonthKey, -1);
 
   const totalCustomerIds = new Set<string>();
   const currentMonthCustomerIds = new Set<string>();
@@ -1180,6 +1227,7 @@ export async function getShopDashboardSummary({
 
     const amount = parseMoneyAmount(log.amount);
     const currencyCode = normalizeCurrencyCode(log.currencyCode) || grantCurrencyCode;
+    const logMonthKey = getMonthKeyInTimezone(log.createdAt, shopTimezone);
     const existing =
       totalsByCurrency.get(currencyCode) ??
       {
@@ -1193,22 +1241,32 @@ export async function getShopDashboardSummary({
     existing.totalAmount += amount;
     existing.totalCount += 1;
 
-    if (log.createdAt >= currentMonthStart) {
+    if (logMonthKey === currentMonthKey) {
       currentMonthCustomerIds.add(log.customerId);
       existing.currentMonthAmount += amount;
-    } else if (log.createdAt >= previousMonthStart) {
+    } else if (logMonthKey === previousMonthKey) {
       existing.previousMonthAmount += amount;
     }
 
     totalsByCurrency.set(currencyCode, existing);
   }
 
-  const currentMonthLogs = manualGrantLogs.filter((log) => log.createdAt >= currentMonthStart);
+  const currentMonthLogs = manualGrantLogs.filter(
+    (log) => getMonthKeyInTimezone(log.createdAt, shopTimezone) === currentMonthKey,
+  );
 
   return {
     shopCurrency,
+    shopTimezone,
     grantCurrencyCode,
     settings: serializeShopSettings(settings),
+    kpiDefinition: {
+      timeZone: shopTimezone,
+      monthlyBoundary: "month_start_to_month_end_in_shop_timezone",
+      grantedAmountBasis: "manual_grant_log_created_at",
+      currencyBasis: "store_credit_amount_raw",
+      cancellationAdjustment: "manual_adjustment_only_in_v1",
+    },
     metrics: {
       totalManualGrantCount: manualGrantLogs.length,
       totalManualGrantCustomerCount: totalCustomerIds.size,

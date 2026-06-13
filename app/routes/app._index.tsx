@@ -11,12 +11,13 @@ function formatMoney(amount: number, currencyCode: string) {
   }).format(amount);
 }
 
-function formatDate(value: string | null) {
+function formatDate(value: string | null, timeZone?: string) {
   if (!value) {
     return "未処理";
   }
 
   return new Intl.DateTimeFormat("ja-JP", {
+    timeZone,
     year: "numeric",
     month: "2-digit",
     day: "2-digit",
@@ -36,6 +37,8 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 export default function Index() {
   const {
     grantCurrencyCode,
+    shopTimezone,
+    kpiDefinition,
     settings,
     metrics,
     currencyBreakdown,
@@ -127,11 +130,16 @@ export default function Index() {
           <article className="rnk-card">
             <h2>いまのダッシュボードの前提</h2>
             <ul className="rnk-list">
-              <li>KPI はまず app 側の手動付与ログをもとに表示</li>
-              <li>異なる通貨を混ぜないよう、金額は通貨別に分けて表示</li>
+              <li>KPI の月次境界はストア管理タイムゾーン `{shopTimezone}` で固定</li>
+              <li>付与額は `ManualGrantLog.createdAt` を計上基準に集計</li>
+              <li>異なる通貨を混ぜないよう、金額は Store Credit 額を通貨別に分けて表示</li>
+              <li>キャンセルや返品の控除は v1 では自動相殺せず、手動調整の実行日で反映</li>
               <li>Store Credit 全体残高のネイティブ集計は次段階</li>
               <li>`orders/paid` 自動付与と usage billing は開発ストアで実地確認済み</li>
             </ul>
+            <p className="rnk-muted" style={{ marginTop: 12 }}>
+              Basis: {kpiDefinition.grantedAmountBasis} / TZ: {kpiDefinition.timeZone}
+            </p>
           </article>
         </section>
 
@@ -183,7 +191,7 @@ export default function Index() {
                 <tbody>
                   {recentManualGrants.map((log) => (
                     <tr key={log.id}>
-                      <td>{formatDate(log.createdAt)}</td>
+                      <td>{formatDate(log.createdAt, shopTimezone)}</td>
                       <td>{log.customerDisplayName || log.customerEmail}</td>
                       <td>{formatMoney(Number(log.amount), log.currencyCode)}</td>
                       <td>{log.reason ?? "未設定"}</td>
@@ -213,7 +221,7 @@ export default function Index() {
                 <tbody>
                   {recentGrantLocks.map((lock) => (
                     <tr key={lock.id}>
-                      <td>{formatDate(lock.createdAt)}</td>
+                      <td>{formatDate(lock.createdAt, shopTimezone)}</td>
                       <td>{lock.sourceType}</td>
                       <td>{lock.key}</td>
                       <td>{lock.status}</td>
