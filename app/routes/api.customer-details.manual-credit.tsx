@@ -1,6 +1,8 @@
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
 import {
   buildManualGrantFormValues,
+  MANUAL_GRANT_DAILY_CUSTOMER_LIMIT,
+  MANUAL_GRANT_MAX_AMOUNT,
   validateManualGrantForm,
 } from "../lib/store-credit";
 import { getBridgePointsBillingGate } from "../lib/billing.server";
@@ -9,6 +11,23 @@ import {
   issueManualStoreCreditByCustomerId,
 } from "../lib/store-credit.server";
 import { authenticate } from "../shopify.server";
+
+function requireManualGrantActor(session: {
+  isOnline?: boolean;
+  userId?: bigint | number | null;
+  email?: string | null;
+}) {
+  if (!session.isOnline || !session.userId || !session.email?.trim()) {
+    throw new Error(
+      "手動付与を実行するには、Shopify 管理画面のスタッフとしてログインし直してください。",
+    );
+  }
+
+  return {
+    staffUserId: String(session.userId),
+    staffEmail: session.email.trim(),
+  };
+}
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { cors } = await authenticate.admin(request);
@@ -86,9 +105,11 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   });
 
   try {
+    const actor = requireManualGrantActor(session);
     const { customer, transaction } = await issueManualStoreCreditByCustomerId({
       admin,
       shop: session.shop,
+      actor,
       customerId,
       amount: values.amount,
       currencyCode: grantCurrencyCode,
@@ -111,6 +132,10 @@ export const action = async ({ request }: ActionFunctionArgs) => {
           balance: transaction.account.balance,
           expiresAt: transaction.expiresAt,
           createdAt: transaction.createdAt,
+        },
+        limits: {
+          perGrant: MANUAL_GRANT_MAX_AMOUNT,
+          perCustomerPerDay: MANUAL_GRANT_DAILY_CUSTOMER_LIMIT,
         },
       }),
     );

@@ -4,6 +4,10 @@ import {
   recordProcessedOrderUsageCharge,
   type BillingContextLike,
 } from "./billing.server";
+import {
+  MANUAL_GRANT_DAILY_CUSTOMER_LIMIT,
+  MANUAL_GRANT_MAX_AMOUNT,
+} from "./store-credit";
 
 type AdminGraphqlClient = {
   graphql: (
@@ -116,6 +120,11 @@ type ManualGrantRequest = {
 
 type ManualGrantByCustomerIdRequest = Omit<ManualGrantRequest, "customerEmail"> & {
   customerId: string;
+};
+
+type ManualGrantActor = {
+  staffUserId: string;
+  staffEmail: string;
 };
 
 export const ORDER_PAID_TRIGGER_TOPIC = "orders/paid";
@@ -279,6 +288,8 @@ function serializeManualGrantLog(log: {
   id: string;
   customerEmail: string;
   customerDisplayName: string | null;
+  staffUserId: string;
+  staffEmail: string;
   amount: string;
   currencyCode: string;
   createdAt: Date;
@@ -291,6 +302,8 @@ function serializeManualGrantLog(log: {
     id: log.id,
     customerEmail: log.customerEmail,
     customerDisplayName: log.customerDisplayName,
+    staffUserId: log.staffUserId,
+    staffEmail: log.staffEmail,
     amount: log.amount,
     currencyCode: log.currencyCode,
     createdAt: log.createdAt.toISOString(),
@@ -405,6 +418,7 @@ async function createManualGrantLog({
   shop,
   customer,
   transaction,
+  actor,
   customerEmailFallback,
   notifyCustomer,
   reason,
@@ -420,6 +434,7 @@ async function createManualGrantLog({
       balance: Money;
     };
   };
+  actor: ManualGrantActor;
   customerEmailFallback?: string;
   notifyCustomer: boolean;
   reason: string;
@@ -431,6 +446,8 @@ async function createManualGrantLog({
       customerEmail:
         customer.defaultEmailAddress?.emailAddress ?? customerEmailFallback ?? "unknown",
       customerDisplayName: customer.displayName,
+      staffUserId: actor.staffUserId,
+      staffEmail: actor.staffEmail,
       amount: transaction.amount.amount,
       currencyCode: transaction.amount.currencyCode,
       expiresAt: transaction.expiresAt ? new Date(transaction.expiresAt) : null,
@@ -533,6 +550,69 @@ async function creditStoreCreditAccount({
       balance: Money;
     };
   };
+}
+
+function normalizeManualGrantAmount(amount: string) {
+  const parsed = Number(amount);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    throw new Error("付与額は 0 より大きい数値で入力してください。");
+  }
+
+  return parsed;
+}
+
+function getManualGrantDayRange(now = new Date()) {
+  const start = new Date(now);
+  start.setUTCHours(0, 0, 0, 0);
+
+  const end = new Date(start);
+  end.setUTCDate(end.getUTCDate() + 1);
+
+  return { start, end };
+}
+
+async function assertManualGrantWithinLimits({
+  shop,
+  customerId,
+  amount,
+}: {
+  shop: string;
+  customerId: string;
+  amount: string;
+}) {
+  const requestedAmount = normalizeManualGrantAmount(amount);
+
+  if (requestedAmount > MANUAL_GRANT_MAX_AMOUNT) {
+    throw new Error(
+      `手動付与は 1 回あたり ${MANUAL_GRANT_MAX_AMOUNT.toLocaleString("ja-JP")}pt までです。`,
+    );
+  }
+
+  const { start, end } = getManualGrantDayRange();
+  const logs = await prisma.manualGrantLog.findMany({
+    where: {
+      shop,
+      customerId,
+      createdAt: {
+        gte: start,
+        lt: end,
+      },
+    },
+    select: {
+      amount: true,
+    },
+  });
+
+  const alreadyGranted = logs.reduce((total, log) => {
+    return total + normalizeManualGrantAmount(log.amount);
+  }, 0);
+
+  if (alreadyGranted + requestedAmount > MANUAL_GRANT_DAILY_CUSTOMER_LIMIT) {
+    const remaining = Math.max(MANUAL_GRANT_DAILY_CUSTOMER_LIMIT - alreadyGranted, 0);
+    throw new Error(
+      `この顧客への手動付与は 1 日あたり ${MANUAL_GRANT_DAILY_CUSTOMER_LIMIT.toLocaleString("ja-JP")}pt までです。残り付与可能額は ${remaining.toLocaleString("ja-JP")}pt です。`,
+    );
+  }
 }
 
 export async function getShopCurrency(admin: AdminGraphqlClient) {
@@ -1356,18 +1436,25 @@ export async function getCustomerStoreCreditSummary({
 export async function issueManualStoreCredit({
   admin,
   shop,
+  actor,
   customerEmail,
   amount,
   currencyCode,
   expiresInDays,
   notifyCustomer,
   reason,
-}: ManualGrantRequest) {
+}: ManualGrantRequest & { actor: ManualGrantActor }) {
   const customer = await findCustomerByEmail(admin, customerEmail);
 
   if (!customer) {
     throw new Error("該当する顧客が見つかりません。メールアドレスを確認してください。");
   }
+
+  await assertManualGrantWithinLimits({
+    shop,
+    customerId: customer.id,
+    amount,
+  });
 
   const transaction = await creditStoreCreditAccount({
     admin,
@@ -1381,6 +1468,7 @@ export async function issueManualStoreCredit({
     shop,
     customer,
     transaction,
+    actor,
     customerEmailFallback: customerEmail,
     notifyCustomer,
     reason,
@@ -1395,13 +1483,20 @@ export async function issueManualStoreCredit({
 export async function issueManualStoreCreditByCustomerId({
   admin,
   shop,
+  actor,
   customerId,
   amount,
   currencyCode,
   expiresInDays,
   notifyCustomer,
   reason,
-}: ManualGrantByCustomerIdRequest) {
+}: ManualGrantByCustomerIdRequest & { actor: ManualGrantActor }) {
+  await assertManualGrantWithinLimits({
+    shop,
+    customerId,
+    amount,
+  });
+
   const transaction = await creditStoreCreditAccount({
     admin,
     customerId,
@@ -1418,6 +1513,7 @@ export async function issueManualStoreCreditByCustomerId({
       defaultEmailAddress: null,
     },
     transaction,
+    actor,
     notifyCustomer,
     reason,
   });

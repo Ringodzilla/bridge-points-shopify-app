@@ -1,4 +1,6 @@
 export const DEFAULT_MANUAL_EXPIRY_DAYS = 365;
+export const MANUAL_GRANT_MAX_AMOUNT = 10_000;
+export const MANUAL_GRANT_DAILY_CUSTOMER_LIMIT = 20_000;
 
 export const DEFAULT_MANUAL_GRANT_FORM = {
   customerEmail: "",
@@ -40,6 +42,8 @@ export function validateManualGrantForm(
   const parsedAmount = Number(values.amount);
   if (!Number.isFinite(parsedAmount) || parsedAmount <= 0) {
     errors.amount = "付与額は 0 より大きい数値で入力してください。";
+  } else if (parsedAmount > MANUAL_GRANT_MAX_AMOUNT) {
+    errors.amount = `付与額は 1 回あたり ${MANUAL_GRANT_MAX_AMOUNT.toLocaleString("ja-JP")} までです。`;
   }
 
   const parsedDays = Number(values.expiresInDays);

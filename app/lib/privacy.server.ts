@@ -17,6 +17,8 @@ type SerializedManualGrantLog = {
   customerId: string;
   customerEmail: string;
   customerDisplayName: string | null;
+  staffUserId: string;
+  staffEmail: string;
   amount: string;
   currencyCode: string;
   expiresAt: string | null;
@@ -110,6 +112,8 @@ function serializeManualGrantLog(log: {
   customerId: string;
   customerEmail: string;
   customerDisplayName: string | null;
+  staffUserId: string;
+  staffEmail: string;
   amount: string;
   currencyCode: string;
   expiresAt: Date | null;
@@ -122,6 +126,8 @@ function serializeManualGrantLog(log: {
     customerId: log.customerId,
     customerEmail: log.customerEmail,
     customerDisplayName: log.customerDisplayName,
+    staffUserId: log.staffUserId,
+    staffEmail: log.staffEmail,
     amount: log.amount,
     currencyCode: log.currencyCode,
     expiresAt: log.expiresAt?.toISOString() ?? null,

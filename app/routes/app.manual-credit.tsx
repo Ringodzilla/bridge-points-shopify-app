@@ -11,6 +11,8 @@ import { getBridgePointsBillingGate } from "../lib/billing.server";
 import {
   buildManualGrantFormValues,
   DEFAULT_MANUAL_GRANT_FORM,
+  MANUAL_GRANT_DAILY_CUSTOMER_LIMIT,
+  MANUAL_GRANT_MAX_AMOUNT,
   validateManualGrantForm,
 } from "../lib/store-credit";
 import {
@@ -18,6 +20,23 @@ import {
   issueManualStoreCredit,
 } from "../lib/store-credit.server";
 import { authenticate } from "../shopify.server";
+
+function requireManualGrantActor(session: {
+  isOnline?: boolean;
+  userId?: bigint | number | null;
+  email?: string | null;
+}) {
+  if (!session.isOnline || !session.userId || !session.email?.trim()) {
+    throw new Error(
+      "手動付与を実行するには、Shopify 管理画面のスタッフとしてログインし直してください。",
+    );
+  }
+
+  return {
+    staffUserId: String(session.userId),
+    staffEmail: session.email.trim(),
+  };
+}
 
 function formatDate(value: string | null) {
   if (!value) {
@@ -113,9 +132,11 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   }
 
   try {
+    const actor = requireManualGrantActor(session);
     await issueManualStoreCredit({
       admin,
       shop: session.shop,
+      actor,
       customerEmail: values.customerEmail,
       amount: values.amount,
       currencyCode: grantCurrencyCode,
@@ -241,6 +262,11 @@ export default function ManualCreditPage() {
           <p className="rnk-muted" style={{ marginTop: 14 }}>
             顧客通知メールは Shopify Store Credit API の制約により v1 では未対応です。
           </p>
+          <p className="rnk-muted" style={{ marginTop: 8 }}>
+            手動付与は 1 回あたり {MANUAL_GRANT_MAX_AMOUNT.toLocaleString("ja-JP")}pt、
+            1 顧客あたり 1 日 {MANUAL_GRANT_DAILY_CUSTOMER_LIMIT.toLocaleString("ja-JP")}pt
+            までです。実行者のスタッフ情報は監査ログへ保存されます。
+          </p>
 
           <div className="rnk-actions" style={{ marginTop: 16 }}>
             <button className="rnk-button" type="submit">
@@ -282,6 +308,7 @@ export default function ManualCreditPage() {
               <thead>
                 <tr>
                   <th>日時</th>
+                  <th>実行者</th>
                   <th>顧客</th>
                   <th>付与額</th>
                   <th>有効期限</th>
@@ -293,6 +320,11 @@ export default function ManualCreditPage() {
                 {recentLogs.map((log) => (
                   <tr key={log.id}>
                     <td>{formatDate(log.createdAt)}</td>
+                    <td>
+                      <span className="rnk-muted">{log.staffEmail}</span>
+                      <br />
+                      <span className="rnk-muted">staff: {log.staffUserId}</span>
+                    </td>
                     <td>
                       <strong>{log.customerDisplayName || "名前未設定"}</strong>
                       <br />

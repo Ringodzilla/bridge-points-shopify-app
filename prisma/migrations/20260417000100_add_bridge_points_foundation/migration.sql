@@ -16,6 +16,8 @@ CREATE TABLE "ManualGrantLog" (
     "customerId" TEXT NOT NULL,
     "customerEmail" TEXT NOT NULL,
     "customerDisplayName" TEXT,
+    "staffUserId" TEXT NOT NULL,
+    "staffEmail" TEXT NOT NULL,
     "amount" TEXT NOT NULL,
     "currencyCode" TEXT NOT NULL,
     "expiresAt" DATETIME,

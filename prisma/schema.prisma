@@ -51,6 +51,8 @@ model ManualGrantLog {
   customerId           String
   customerEmail        String
   customerDisplayName  String?
+  staffUserId          String
+  staffEmail           String
   amount               String
   currencyCode         String
   expiresAt            DateTime?

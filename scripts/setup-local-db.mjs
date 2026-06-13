@@ -13,6 +13,16 @@ const upgrades = [
     column: "defaultGrantCurrencyCode",
     sql: 'ALTER TABLE "ShopSettings" ADD COLUMN "defaultGrantCurrencyCode" TEXT;',
   },
+  {
+    table: "ManualGrantLog",
+    column: "staffUserId",
+    sql: 'ALTER TABLE "ManualGrantLog" ADD COLUMN "staffUserId" TEXT NOT NULL DEFAULT \'unknown\';',
+  },
+  {
+    table: "ManualGrantLog",
+    column: "staffEmail",
+    sql: 'ALTER TABLE "ManualGrantLog" ADD COLUMN "staffEmail" TEXT NOT NULL DEFAULT \'unknown\';',
+  },
 ];
 
 function runSql(sql) {
