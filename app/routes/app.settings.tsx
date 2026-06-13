@@ -14,6 +14,7 @@ type SettingsFormValues = {
   defaultGrantCurrencyCode: string;
   defaultExpiryDays: string;
   manualDefaultExpiryDays: string;
+  operationsAlertEmail: string;
 };
 
 type SettingsFormErrors = Partial<Record<keyof SettingsFormValues | "form", string>>;
@@ -76,7 +77,8 @@ function areSettingsFormValuesEqual(left: SettingsFormValues, right: SettingsFor
     left.grantRateDenominator === right.grantRateDenominator &&
     left.defaultGrantCurrencyCode === right.defaultGrantCurrencyCode &&
     left.defaultExpiryDays === right.defaultExpiryDays &&
-    left.manualDefaultExpiryDays === right.manualDefaultExpiryDays
+    left.manualDefaultExpiryDays === right.manualDefaultExpiryDays &&
+    left.operationsAlertEmail === right.operationsAlertEmail
   );
 }
 
@@ -112,6 +114,7 @@ function buildSettingsFormValues({
   defaultGrantCurrencyCode,
   defaultExpiryDays,
   manualDefaultExpiryDays,
+  operationsAlertEmail,
 }: {
   autoGrantEnabled: boolean;
   grantRateNumerator: number;
@@ -119,6 +122,7 @@ function buildSettingsFormValues({
   defaultGrantCurrencyCode: string;
   defaultExpiryDays: number;
   manualDefaultExpiryDays: number;
+  operationsAlertEmail: string | null;
 }): SettingsFormValues {
   return {
     autoGrantEnabled,
@@ -127,7 +131,16 @@ function buildSettingsFormValues({
     defaultGrantCurrencyCode,
     defaultExpiryDays: String(defaultExpiryDays),
     manualDefaultExpiryDays: String(manualDefaultExpiryDays),
+    operationsAlertEmail: operationsAlertEmail?.trim() ?? "",
   };
+}
+
+function isValidOptionalEmail(value: string) {
+  if (!value.trim()) {
+    return true;
+  }
+
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value.trim());
 }
 
 function parsePositiveInteger(value: string, fallbackLabel: string, max = 3650) {
@@ -183,6 +196,10 @@ function validateSettingsForm(values: SettingsFormValues): SettingsFormErrors {
     errors.manualDefaultExpiryDays = manualDefaultExpiryDays.error;
   }
 
+  if (!isValidOptionalEmail(values.operationsAlertEmail)) {
+    errors.operationsAlertEmail = "通知先メールアドレスの形式を確認してください。";
+  }
+
   return errors;
 }
 
@@ -203,6 +220,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       defaultGrantCurrencyCode: grantCurrencyCode,
       defaultExpiryDays: settings.defaultExpiryDays,
       manualDefaultExpiryDays: settings.manualDefaultExpiryDays,
+      operationsAlertEmail: settings.operationsAlertEmail,
     }),
     ...currencyOptions,
   };
@@ -222,6 +240,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     defaultGrantCurrencyCode: normalizeCurrencyCode(formData.get("defaultGrantCurrencyCode")),
     defaultExpiryDays: String(formData.get("defaultExpiryDays") ?? "").trim(),
     manualDefaultExpiryDays: String(formData.get("manualDefaultExpiryDays") ?? "").trim(),
+    operationsAlertEmail: String(formData.get("operationsAlertEmail") ?? "").trim(),
   };
   const errors = validateSettingsForm(values);
 
@@ -244,6 +263,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         defaultGrantCurrencyCode: values.defaultGrantCurrencyCode,
         defaultExpiryDays: Number(values.defaultExpiryDays),
         manualDefaultExpiryDays: Number(values.manualDefaultExpiryDays),
+        operationsAlertEmail: values.operationsAlertEmail,
       },
     });
 
@@ -260,6 +280,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
           values.defaultGrantCurrencyCode,
         defaultExpiryDays: saved.defaultExpiryDays,
         manualDefaultExpiryDays: saved.manualDefaultExpiryDays,
+        operationsAlertEmail: saved.operationsAlertEmail,
       }),
       shopCurrency,
     };
@@ -476,6 +497,26 @@ export default function SettingsPage() {
               ) : null}
             </label>
           </div>
+
+          <label className="rnk-field" style={{ marginTop: 14 }}>
+            <span className="rnk-label">障害通知先メールアドレス</span>
+            <input
+              className="rnk-input"
+              value={formValues.operationsAlertEmail}
+              type="email"
+              name="operationsAlertEmail"
+              onChange={(event) => {
+                updateFormValue("operationsAlertEmail", event.currentTarget.value);
+              }}
+              placeholder="ops@example.com"
+            />
+            <span className="rnk-muted">
+              `PERMANENT` 障害の通知先として表示します。未設定時は app 内通知のみになります。
+            </span>
+            {errors?.operationsAlertEmail ? (
+              <span className="rnk-muted">{errors.operationsAlertEmail}</span>
+            ) : null}
+          </label>
 
           <div className="rnk-actions" style={{ marginTop: 16 }}>
             <button className="rnk-button" disabled={isSubmitting || !hasUnsavedChanges} type="submit">

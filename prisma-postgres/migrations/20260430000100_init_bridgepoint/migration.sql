@@ -28,6 +28,7 @@ CREATE TABLE "ShopSettings" (
     "defaultGrantCurrencyCode" TEXT,
     "defaultExpiryDays" INTEGER NOT NULL DEFAULT 365,
     "manualDefaultExpiryDays" INTEGER NOT NULL DEFAULT 365,
+    "operationsAlertEmail" TEXT,
     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "updatedAt" TIMESTAMP(3) NOT NULL,
 
@@ -65,6 +66,12 @@ CREATE TABLE "GrantExecutionLock" (
     "status" TEXT NOT NULL DEFAULT 'pending',
     "payloadJson" TEXT,
     "processedAt" TIMESTAMP(3),
+    "failureCategory" TEXT,
+    "lastErrorMessage" TEXT,
+    "retryEligibleUntil" TIMESTAMP(3),
+    "nextRetryAt" TIMESTAMP(3),
+    "retryCount" INTEGER NOT NULL DEFAULT 0,
+    "lastNotifiedAt" TIMESTAMP(3),
     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "updatedAt" TIMESTAMP(3) NOT NULL,
 

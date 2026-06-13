@@ -103,6 +103,7 @@ Run this smoke test through the production Fly URL before App Store submission:
 - Confirm the embedded app loads at the production URL.
 - Create a small manual store credit grant from the app or customer details action.
 - Trigger or replay an `orders/paid` flow and confirm the webhook grants once.
+- If you enable daily retry automation, call `POST /api/internal/order-paid-retries` with `Authorization: Bearer $ORDER_PAID_RETRY_JOB_SECRET`.
 - Confirm legal pages load from the production host.
 - Confirm billing approval opens in live mode with `SHOPIFY_BILLING_TEST_MODE=false`.
 

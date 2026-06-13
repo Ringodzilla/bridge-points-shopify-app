@@ -41,6 +41,7 @@ model ShopSettings {
   defaultGrantCurrencyCode String?
   defaultExpiryDays       Int      @default(365)
   manualDefaultExpiryDays Int      @default(365)
+  operationsAlertEmail    String?
   createdAt               DateTime @default(now())
   updatedAt               DateTime @updatedAt
 }
@@ -69,16 +70,22 @@ model ManualGrantLog {
 }
 
 model GrantExecutionLock {
-  id          String   @id @default(cuid())
-  shop        String
-  key         String
-  sourceType  String
-  sourceId    String?
-  status      String   @default("pending")
-  payloadJson String?
-  processedAt DateTime?
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  id                 String   @id @default(cuid())
+  shop               String
+  key                String
+  sourceType         String
+  sourceId           String?
+  status             String   @default("pending")
+  payloadJson        String?
+  processedAt        DateTime?
+  failureCategory    String?
+  lastErrorMessage   String?
+  retryEligibleUntil DateTime?
+  nextRetryAt        DateTime?
+  retryCount         Int      @default(0)
+  lastNotifiedAt     DateTime?
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
 
   @@unique([shop, key])
   @@index([shop, sourceType, createdAt])

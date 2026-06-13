@@ -1,6 +1,9 @@
-import type { LoaderFunctionArgs } from "react-router";
-import { Link, useLoaderData } from "react-router";
-import { getShopDashboardSummary } from "../lib/store-credit.server";
+import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
+import { Form, Link, useActionData, useLoaderData } from "react-router";
+import {
+  getShopDashboardSummary,
+  retryFailedOrderPaidGrant,
+} from "../lib/store-credit.server";
 import { authenticate } from "../shopify.server";
 
 function formatMoney(amount: number, currencyCode: string) {
@@ -34,6 +37,52 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   });
 };
 
+export const action = async ({ request }: ActionFunctionArgs) => {
+  const { admin, billing, session } = await authenticate.admin(request);
+  const formData = await request.formData();
+  const intent = String(formData.get("intent") ?? "");
+
+  if (intent !== "retry-order-paid-grant") {
+    return {
+      ok: false,
+      error: "不明な操作です。",
+    };
+  }
+
+  const key = String(formData.get("key") ?? "").trim();
+  const allowUnknown = formData.get("allowUnknown") === "true";
+
+  if (!key) {
+    return {
+      ok: false,
+      error: "再実行対象の key が必要です。",
+    };
+  }
+
+  try {
+    const result = await retryFailedOrderPaidGrant({
+      admin,
+      billing,
+      shop: session.shop,
+      key,
+      allowUnknown,
+    });
+
+    return {
+      ok: true,
+      retriedKey: key,
+      status: result.status,
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      retriedKey: key,
+      error:
+        error instanceof Error ? error.message : "再実行中に予期しないエラーが発生しました。",
+    };
+  }
+};
+
 export default function Index() {
   const {
     grantCurrencyCode,
@@ -44,7 +93,9 @@ export default function Index() {
     currencyBreakdown,
     recentManualGrants,
     recentGrantLocks,
+    activeGrantFailures,
   } = useLoaderData<typeof loader>();
+  const actionData = useActionData<typeof action>();
 
   return (
     <s-page heading="BridgePoint">
@@ -105,10 +156,18 @@ export default function Index() {
             <h2>二重付与防止基盤</h2>
             <p className="rnk-kpi">Ready</p>
             <p className="rnk-muted">
-              最近の lock 件数: {metrics.recentIdempotencyLockCount}
+              最近の lock 件数: {metrics.recentIdempotencyLockCount} / 要対応障害:{" "}
+              {metrics.activeGrantFailureCount}
             </p>
           </article>
         </section>
+
+        {actionData?.error ? <p className="rnk-note">{actionData.error}</p> : null}
+        {actionData?.ok ? (
+          <p className="rnk-note">
+            `orders/paid` 自動付与の再実行を開始しました。key: {actionData.retriedKey}
+          </p>
+        ) : null}
 
         <section className="rnk-split">
           <article className="rnk-card">
@@ -141,6 +200,53 @@ export default function Index() {
               Basis: {kpiDefinition.grantedAmountBasis} / TZ: {kpiDefinition.timeZone}
             </p>
           </article>
+        </section>
+
+        <section className="rnk-card">
+          <h2>要対応の自動付与障害</h2>
+          {activeGrantFailures.length === 0 ? (
+            <p className="rnk-muted">
+              現在、再実行や確認が必要な `orders/paid` 自動付与障害はありません。
+            </p>
+          ) : (
+            <table className="rnk-table">
+              <thead>
+                <tr>
+                  <th>作成日時</th>
+                  <th>分類</th>
+                  <th>key</th>
+                  <th>次回再実行</th>
+                  <th>通知先</th>
+                  <th>操作</th>
+                </tr>
+              </thead>
+              <tbody>
+                {activeGrantFailures.map((lock) => (
+                  <tr key={lock.id}>
+                    <td>{formatDate(lock.createdAt, shopTimezone)}</td>
+                    <td>{lock.failureCategory ?? lock.status}</td>
+                    <td>{lock.key}</td>
+                    <td>{formatDate(lock.nextRetryAt, shopTimezone)}</td>
+                    <td>{settings.operationsAlertEmail || "app 内通知のみ"}</td>
+                    <td>
+                      <Form method="post">
+                        <input type="hidden" name="intent" value="retry-order-paid-grant" />
+                        <input type="hidden" name="key" value={lock.key} />
+                        <input
+                          type="hidden"
+                          name="allowUnknown"
+                          value={lock.failureCategory === "UNKNOWN" ? "true" : "false"}
+                        />
+                        <button className="rnk-button-secondary" type="submit">
+                          {lock.failureCategory === "UNKNOWN" ? "確認後に再実行" : "再実行"}
+                        </button>
+                      </Form>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
         </section>
 
         <section className="rnk-card">

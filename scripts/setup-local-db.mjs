@@ -23,6 +23,41 @@ const upgrades = [
     column: "staffEmail",
     sql: 'ALTER TABLE "ManualGrantLog" ADD COLUMN "staffEmail" TEXT NOT NULL DEFAULT \'unknown\';',
   },
+  {
+    table: "ShopSettings",
+    column: "operationsAlertEmail",
+    sql: 'ALTER TABLE "ShopSettings" ADD COLUMN "operationsAlertEmail" TEXT;',
+  },
+  {
+    table: "GrantExecutionLock",
+    column: "failureCategory",
+    sql: 'ALTER TABLE "GrantExecutionLock" ADD COLUMN "failureCategory" TEXT;',
+  },
+  {
+    table: "GrantExecutionLock",
+    column: "lastErrorMessage",
+    sql: 'ALTER TABLE "GrantExecutionLock" ADD COLUMN "lastErrorMessage" TEXT;',
+  },
+  {
+    table: "GrantExecutionLock",
+    column: "retryEligibleUntil",
+    sql: 'ALTER TABLE "GrantExecutionLock" ADD COLUMN "retryEligibleUntil" DATETIME;',
+  },
+  {
+    table: "GrantExecutionLock",
+    column: "nextRetryAt",
+    sql: 'ALTER TABLE "GrantExecutionLock" ADD COLUMN "nextRetryAt" DATETIME;',
+  },
+  {
+    table: "GrantExecutionLock",
+    column: "retryCount",
+    sql: 'ALTER TABLE "GrantExecutionLock" ADD COLUMN "retryCount" INTEGER NOT NULL DEFAULT 0;',
+  },
+  {
+    table: "GrantExecutionLock",
+    column: "lastNotifiedAt",
+    sql: 'ALTER TABLE "GrantExecutionLock" ADD COLUMN "lastNotifiedAt" DATETIME;',
+  },
 ];
 
 function runSql(sql) {

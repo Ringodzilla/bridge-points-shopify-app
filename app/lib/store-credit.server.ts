@@ -1,5 +1,6 @@
 import { Prisma } from "@prisma/client";
 import prisma from "../db.server";
+import { unauthenticated } from "../shopify.server";
 import {
   recordProcessedOrderUsageCharge,
   type BillingContextLike,
@@ -136,6 +137,10 @@ export const ORDER_PAID_TRIGGER_TOPIC = "orders/paid";
 const ORDER_PAID_GRANT_RULE_VERSION = "2026-06-v1";
 const ORDER_PAID_LOCK_RETENTION_DAYS = 400;
 const ORDER_PAID_LOCK_PREFIX = "order_paid";
+const ORDER_PAID_RETRY_WINDOW_DAYS = 30;
+const ORDER_PAID_AUTO_RETRY_INTERVAL_HOURS = 24;
+
+type GrantFailureCategory = "TEMPORARY" | "PERMANENT" | "UNKNOWN";
 
 function buildExpiryAt(expiresInDays: number) {
   const expiresAt = new Date();
@@ -190,7 +195,10 @@ function extractGraphqlErrorMessage(json: Record<string, unknown>) {
   return messages[0] ?? "";
 }
 
-function classifyOrderPaidGrantError(message: string): "failed" | "unknown" {
+function classifyOrderPaidGrantError(message: string): {
+  status: "failed" | "unknown";
+  failureCategory: GrantFailureCategory;
+} {
   const normalized = message.toLowerCase();
 
   if (
@@ -204,10 +212,43 @@ function classifyOrderPaidGrantError(message: string): "failed" | "unknown" {
     normalized.includes("502") ||
     normalized.includes("500")
   ) {
-    return "unknown";
+    return {
+      status: "failed",
+      failureCategory: "TEMPORARY",
+    };
   }
 
-  return "failed";
+  if (
+    normalized.includes("rate limit") ||
+    normalized.includes("throttle") ||
+    normalized.includes("too many requests")
+  ) {
+    return {
+      status: "failed",
+      failureCategory: "TEMPORARY",
+    };
+  }
+
+  if (
+    normalized.includes("not approved to access the customer object") ||
+    normalized.includes("protected customer data") ||
+    normalized.includes("access_denied") ||
+    normalized.includes("customer") && normalized.includes("not found") ||
+    normalized.includes("権限") ||
+    normalized.includes("見つかりません") ||
+    normalized.includes("通貨") ||
+    normalized.includes("currency")
+  ) {
+    return {
+      status: "failed",
+      failureCategory: "PERMANENT",
+    };
+  }
+
+  return {
+    status: "unknown",
+    failureCategory: "UNKNOWN",
+  };
 }
 
 function calculateOrderPaidGrantAmount({
@@ -327,6 +368,12 @@ function serializeGrantExecutionLock(lock: {
   status: string;
   payloadJson: string | null;
   processedAt: Date | null;
+  failureCategory: string | null;
+  lastErrorMessage: string | null;
+  retryEligibleUntil: Date | null;
+  nextRetryAt: Date | null;
+  retryCount: number;
+  lastNotifiedAt: Date | null;
   createdAt: Date;
 }) {
   return {
@@ -337,6 +384,12 @@ function serializeGrantExecutionLock(lock: {
     status: lock.status,
     payloadJson: lock.payloadJson,
     processedAt: lock.processedAt?.toISOString() ?? null,
+    failureCategory: lock.failureCategory,
+    lastErrorMessage: lock.lastErrorMessage,
+    retryEligibleUntil: lock.retryEligibleUntil?.toISOString() ?? null,
+    nextRetryAt: lock.nextRetryAt?.toISOString() ?? null,
+    retryCount: lock.retryCount,
+    lastNotifiedAt: lock.lastNotifiedAt?.toISOString() ?? null,
     createdAt: lock.createdAt.toISOString(),
   };
 }
@@ -348,6 +401,7 @@ function serializeShopSettings(settings: {
   defaultGrantCurrencyCode: string | null;
   defaultExpiryDays: number;
   manualDefaultExpiryDays: number;
+  operationsAlertEmail: string | null;
 }) {
   return {
     autoGrantEnabled: settings.autoGrantEnabled,
@@ -357,6 +411,7 @@ function serializeShopSettings(settings: {
       normalizeCurrencyCode(settings.defaultGrantCurrencyCode) || "JPY",
     defaultExpiryDays: settings.defaultExpiryDays,
     manualDefaultExpiryDays: settings.manualDefaultExpiryDays,
+    operationsAlertEmail: settings.operationsAlertEmail?.trim() ?? "",
   };
 }
 
@@ -586,6 +641,38 @@ function shiftMonthKey(monthKey: string, deltaMonths: number) {
   return `${shifted.getUTCFullYear()}-${String(shifted.getUTCMonth() + 1).padStart(2, "0")}`;
 }
 
+function buildOrderPaidRetryWindow(now = new Date()) {
+  const retryEligibleUntil = new Date(now);
+  retryEligibleUntil.setUTCDate(retryEligibleUntil.getUTCDate() + ORDER_PAID_RETRY_WINDOW_DAYS);
+
+  const nextRetryAt = new Date(now);
+  nextRetryAt.setUTCHours(nextRetryAt.getUTCHours() + ORDER_PAID_AUTO_RETRY_INTERVAL_HOURS);
+
+  return {
+    retryEligibleUntil,
+    nextRetryAt,
+  };
+}
+
+function parseGrantLockPayload(payloadJson: string | null) {
+  if (!payloadJson) {
+    return null;
+  }
+
+  try {
+    const parsed = JSON.parse(payloadJson) as Record<string, unknown>;
+    if (
+      typeof parsed.orderId === "string" &&
+      typeof parsed.customerId === "string" &&
+      typeof parsed.orderTotalAmount === "string"
+    ) {
+      return parsed;
+    }
+  } catch {
+    return null;
+  }
+}
+
 function getManualGrantDayRange(now = new Date()) {
   const start = new Date(now);
   start.setUTCHours(0, 0, 0, 0);
@@ -696,6 +783,7 @@ export async function getShopSettings({
         defaultGrantCurrencyCode: normalizedFallback,
         defaultExpiryDays: 365,
         manualDefaultExpiryDays: 365,
+        operationsAlertEmail: null,
       },
     });
   }
@@ -709,6 +797,7 @@ export async function getShopSettings({
       : normalizedFallback,
     defaultExpiryDays: normalizePositiveInteger(existing.defaultExpiryDays, 365),
     manualDefaultExpiryDays: normalizePositiveInteger(existing.manualDefaultExpiryDays, 365),
+    operationsAlertEmail: existing.operationsAlertEmail?.trim() || null,
   };
 
   if (
@@ -717,7 +806,8 @@ export async function getShopSettings({
     existing.grantRateDenominator !== normalizedSettings.grantRateDenominator ||
     existing.defaultGrantCurrencyCode !== normalizedSettings.defaultGrantCurrencyCode ||
     existing.defaultExpiryDays !== normalizedSettings.defaultExpiryDays ||
-    existing.manualDefaultExpiryDays !== normalizedSettings.manualDefaultExpiryDays
+    existing.manualDefaultExpiryDays !== normalizedSettings.manualDefaultExpiryDays ||
+    (existing.operationsAlertEmail?.trim() || null) !== normalizedSettings.operationsAlertEmail
   ) {
     return prisma.shopSettings.update({
       where: { shop },
@@ -788,6 +878,7 @@ export async function updateShopSettings({
     defaultGrantCurrencyCode: string;
     defaultExpiryDays: number;
     manualDefaultExpiryDays: number;
+    operationsAlertEmail?: string;
   };
 }) {
   const normalizedCurrencyCode = normalizeCurrencyCode(settings.defaultGrantCurrencyCode);
@@ -806,6 +897,7 @@ export async function updateShopSettings({
       settings.manualDefaultExpiryDays,
       365,
     ),
+    operationsAlertEmail: settings.operationsAlertEmail?.trim() || null,
   };
 
   return prisma.shopSettings.upsert({
@@ -885,12 +977,24 @@ async function finalizeGrantExecutionLock({
   status,
   payload,
   processedAt,
+  failureCategory,
+  lastErrorMessage,
+  retryEligibleUntil,
+  nextRetryAt,
+  retryCount,
+  lastNotifiedAt,
 }: {
   shop: string;
   key: string;
   status: string;
   payload?: Record<string, unknown> | null;
   processedAt?: Date | null;
+  failureCategory?: GrantFailureCategory | null;
+  lastErrorMessage?: string | null;
+  retryEligibleUntil?: Date | null;
+  nextRetryAt?: Date | null;
+  retryCount?: number;
+  lastNotifiedAt?: Date | null;
 }) {
   const updated = await prisma.grantExecutionLock.update({
     where: {
@@ -907,6 +1011,12 @@ async function finalizeGrantExecutionLock({
           }
         : {}),
       ...(processedAt !== undefined ? { processedAt } : {}),
+      ...(failureCategory !== undefined ? { failureCategory } : {}),
+      ...(lastErrorMessage !== undefined ? { lastErrorMessage } : {}),
+      ...(retryEligibleUntil !== undefined ? { retryEligibleUntil } : {}),
+      ...(nextRetryAt !== undefined ? { nextRetryAt } : {}),
+      ...(retryCount !== undefined ? { retryCount } : {}),
+      ...(lastNotifiedAt !== undefined ? { lastNotifiedAt } : {}),
     },
   });
 
@@ -927,6 +1037,10 @@ export async function markGrantExecutionLockProcessed({
     key,
     status,
     processedAt: new Date(),
+    failureCategory: null,
+    lastErrorMessage: null,
+    retryEligibleUntil: null,
+    nextRetryAt: null,
   });
 }
 
@@ -1005,6 +1119,181 @@ export async function simulateOrderPaidGrantExecution({
   };
 }
 
+async function finalizeFailedOrderPaidLock({
+  shop,
+  key,
+  preview,
+  message,
+  retryCount,
+  notifyImmediately,
+}: {
+  shop: string;
+  key: string;
+  preview: Record<string, unknown>;
+  message: string;
+  retryCount?: number;
+  notifyImmediately?: boolean;
+}) {
+  const classification = classifyOrderPaidGrantError(message);
+  const retryWindow = buildOrderPaidRetryWindow();
+  const retryDisposition =
+    classification.failureCategory === "TEMPORARY"
+      ? "eligible_for_manual_and_daily_retry"
+      : classification.failureCategory === "PERMANENT"
+        ? "fix_configuration_or_data_before_retry"
+        : "manual_reconciliation_required_before_retry";
+
+  return finalizeGrantExecutionLock({
+    shop,
+    key,
+    status: classification.status,
+    failureCategory: classification.failureCategory,
+    lastErrorMessage: message,
+    retryEligibleUntil:
+      classification.failureCategory === "UNKNOWN" || classification.failureCategory === "TEMPORARY"
+        ? retryWindow.retryEligibleUntil
+        : retryWindow.retryEligibleUntil,
+    nextRetryAt:
+      classification.failureCategory === "TEMPORARY" ? retryWindow.nextRetryAt : null,
+    retryCount,
+    lastNotifiedAt: notifyImmediately ? new Date() : undefined,
+    payload: {
+      ...preview,
+      errorMessage: message,
+      retryDisposition,
+    },
+    processedAt: null,
+  });
+}
+
+async function executeOrderPaidGrantForReservedLock({
+  admin,
+  billing,
+  shop,
+  normalizedCustomerId,
+  normalizedOrderId,
+  preview,
+  settings,
+  grantAmount,
+  retryCount,
+}: {
+  admin: AdminGraphqlClient;
+  billing?: BillingContextLike;
+  shop: string;
+  normalizedCustomerId: string;
+  normalizedOrderId: string;
+  preview: Record<string, unknown> & {
+    key: string;
+    grantCurrencyCode: string;
+  };
+  settings: {
+    defaultExpiryDays: number;
+  };
+  grantAmount: number;
+  retryCount?: number;
+}) {
+  let transaction:
+    | {
+        id: string;
+        amount: Money;
+        createdAt: string;
+        expiresAt: string | null;
+        account: {
+          id: string;
+          balance: Money;
+        };
+      }
+    | null = null;
+
+  try {
+    transaction = await creditStoreCreditAccount({
+      admin,
+      customerId: normalizedCustomerId,
+      amount: String(grantAmount),
+      currencyCode: preview.grantCurrencyCode,
+      expiresInDays: settings.defaultExpiryDays,
+    });
+  } catch (error) {
+    const message =
+      error instanceof Error
+        ? error.message
+        : "Order paid 自動付与中に予期しないエラーが発生しました。";
+
+    const lock = await finalizeFailedOrderPaidLock({
+      shop,
+      key: preview.key,
+      preview,
+      message,
+      retryCount,
+      notifyImmediately: true,
+    });
+
+    return {
+      status: lock.status as "failed" | "unknown",
+      preview,
+      lock,
+      transaction: null,
+      usageCharge: null,
+      errorMessage: message,
+    };
+  }
+
+  const lock = await finalizeGrantExecutionLock({
+    shop,
+    key: preview.key,
+    status: "processed",
+    failureCategory: null,
+    lastErrorMessage: null,
+    retryEligibleUntil: null,
+    nextRetryAt: null,
+    retryCount,
+    payload: {
+      ...preview,
+      storeCreditTransactionId: transaction.id,
+      balanceAfterAmount: transaction.account.balance.amount,
+    },
+    processedAt: new Date(),
+  });
+
+  let usageCharge:
+    | Awaited<ReturnType<typeof recordProcessedOrderUsageCharge>>
+    | {
+        status: "error";
+        errorMessage: string;
+      }
+    | null = null;
+
+  try {
+    usageCharge = billing
+      ? await recordProcessedOrderUsageCharge({
+          billing,
+          shop,
+          orderId: normalizedOrderId,
+        })
+      : await recordProcessedOrderUsageCharge({
+          admin,
+          shop,
+          orderId: normalizedOrderId,
+        });
+  } catch (error) {
+    usageCharge = {
+      status: "error",
+      errorMessage:
+        error instanceof Error
+          ? error.message
+          : "usage record の作成中に予期しないエラーが発生しました。",
+    };
+  }
+
+  return {
+    status: "processed" as const,
+    preview,
+    lock,
+    transaction,
+    usageCharge,
+  };
+}
+
 export async function processOrderPaidGrant({
   admin,
   billing,
@@ -1077,108 +1366,160 @@ export async function processOrderPaidGrant({
     };
   }
 
-  let transaction:
-    | {
-        id: string;
-        amount: Money;
-        createdAt: string;
-        expiresAt: string | null;
-        account: {
-          id: string;
-          balance: Money;
-        };
-      }
-    | null = null;
-
-  try {
-    transaction = await creditStoreCreditAccount({
-      admin,
-      customerId: normalizedCustomerId,
-      amount: String(grantAmount),
-      currencyCode: preview.grantCurrencyCode,
-      expiresInDays: settings.defaultExpiryDays,
-    });
-  } catch (error) {
-    const message =
-      error instanceof Error
-        ? error.message
-        : "Order paid 自動付与中に予期しないエラーが発生しました。";
-    const status = classifyOrderPaidGrantError(message);
-
-    const lock = await finalizeGrantExecutionLock({
-      shop,
-      key: preview.key,
-      status,
-      payload: {
-        ...preview,
-        errorMessage: message,
-        retryDisposition:
-          status === "unknown"
-            ? "do_not_auto_retry_without_manual_reconciliation"
-            : "fix_and_replay_with_new_rule_version",
-      },
-      processedAt: null,
-    });
-
-    return {
-      status,
-      preview,
-      lock,
-      transaction: null,
-      usageCharge: null,
-      errorMessage: message,
-    };
-  }
-
-  const lock = await finalizeGrantExecutionLock({
+  return executeOrderPaidGrantForReservedLock({
+    admin,
+    billing,
     shop,
-    key: preview.key,
-    status: "processed",
-    payload: {
-      ...preview,
-      storeCreditTransactionId: transaction.id,
-      balanceAfterAmount: transaction.account.balance.amount,
+    normalizedCustomerId,
+    normalizedOrderId,
+    preview,
+    settings,
+    grantAmount,
+    retryCount: 0,
+  });
+}
+
+export async function retryFailedOrderPaidGrant({
+  admin,
+  billing,
+  shop,
+  key,
+  allowUnknown = false,
+}: {
+  admin: AdminGraphqlClient;
+  billing?: BillingContextLike;
+  shop: string;
+  key: string;
+  allowUnknown?: boolean;
+}) {
+  const existing = await prisma.grantExecutionLock.findUnique({
+    where: {
+      shop_key: {
+        shop,
+        key,
+      },
     },
-    processedAt: new Date(),
   });
 
-  let usageCharge:
-    | Awaited<ReturnType<typeof recordProcessedOrderUsageCharge>>
-    | {
-        status: "error";
-        errorMessage: string;
-      }
-    | null = null;
-
-  try {
-    usageCharge = billing
-      ? await recordProcessedOrderUsageCharge({
-          billing,
-          shop,
-          orderId: normalizedOrderId,
-        })
-      : await recordProcessedOrderUsageCharge({
-          admin,
-          shop,
-          orderId: normalizedOrderId,
-        });
-  } catch (error) {
-    usageCharge = {
-      status: "error",
-      errorMessage:
-        error instanceof Error
-          ? error.message
-          : "usage record の作成中に予期しないエラーが発生しました。",
-    };
+  if (!existing) {
+    throw new Error("再実行対象の lock が見つかりませんでした。");
   }
 
-  return {
-    status: "processed" as const,
-    preview,
-    lock,
-    transaction,
-    usageCharge,
-  };
+  if (existing.sourceType !== "order_paid") {
+    throw new Error("この lock は orders/paid 自動付与の再実行対象ではありません。");
+  }
+
+  if (!existing.retryEligibleUntil || existing.retryEligibleUntil < new Date()) {
+    throw new Error("この失敗は再実行可能期間を過ぎています。");
+  }
+
+  if (existing.failureCategory === "PERMANENT") {
+    throw new Error("恒久エラーはそのまま再実行できません。設定やデータを修正してください。");
+  }
+
+  if (existing.failureCategory === "UNKNOWN" && !allowUnknown) {
+    throw new Error("結果不明の失敗です。確認後に再実行してください。");
+  }
+
+  const preview = parseGrantLockPayload(existing.payloadJson);
+  if (!preview) {
+    throw new Error("再実行に必要な payload を復元できませんでした。");
+  }
+
+  const { normalizedOrderId, normalizedCustomerId, settings, grantAmount } =
+    await buildOrderPaidGrantPreview({
+      admin,
+      shop,
+      orderId: String(preview.orderId),
+      customerId: String(preview.customerId),
+      orderTotalAmount: String(preview.orderTotalAmount),
+    });
+
+  await prisma.grantExecutionLock.update({
+    where: {
+      shop_key: {
+        shop,
+        key,
+      },
+    },
+    data: {
+      status: "retrying",
+      nextRetryAt: null,
+      retryCount: existing.retryCount + 1,
+    },
+  });
+
+  return executeOrderPaidGrantForReservedLock({
+    admin,
+    billing,
+    shop,
+    normalizedCustomerId,
+    normalizedOrderId,
+    preview: {
+      ...preview,
+      key,
+    } as Record<string, unknown> & {
+      key: string;
+      grantCurrencyCode: string;
+    },
+    settings,
+    grantAmount,
+    retryCount: existing.retryCount + 1,
+  });
+}
+
+export async function processDueOrderPaidRetries({
+  shop,
+}: {
+  shop?: string;
+}) {
+  const locks = await prisma.grantExecutionLock.findMany({
+    where: {
+      ...(shop ? { shop } : {}),
+      sourceType: "order_paid",
+      failureCategory: "TEMPORARY",
+      retryEligibleUntil: {
+        gte: new Date(),
+      },
+      nextRetryAt: {
+        lte: new Date(),
+      },
+    },
+    orderBy: {
+      nextRetryAt: "asc",
+    },
+  });
+
+  const results: Array<{
+    shop: string;
+    key: string;
+    status: string;
+  }> = [];
+
+  for (const lock of locks) {
+    try {
+      const { admin } = await unauthenticated.admin(lock.shop);
+      const result = await retryFailedOrderPaidGrant({
+        admin,
+        shop: lock.shop,
+        key: lock.key,
+      });
+
+      results.push({
+        shop: lock.shop,
+        key: lock.key,
+        status: result.status,
+      });
+    } catch (error) {
+      results.push({
+        shop: lock.shop,
+        key: lock.key,
+        status: error instanceof Error ? error.message : "retry_failed",
+      });
+    }
+  }
+
+  return results;
 }
 
 export async function getShopDashboardSummary({
@@ -1193,7 +1534,7 @@ export async function getShopDashboardSummary({
       admin,
       shop,
     });
-  const [manualGrantLogs, recentGrantLocks] = await Promise.all([
+  const [manualGrantLogs, recentGrantLocks, activeGrantFailureLocks] = await Promise.all([
     prisma.manualGrantLog.findMany({
       where: { shop },
       orderBy: { createdAt: "desc" },
@@ -1201,6 +1542,17 @@ export async function getShopDashboardSummary({
     prisma.grantExecutionLock.findMany({
       where: { shop },
       orderBy: { createdAt: "desc" },
+      take: 5,
+    }),
+    prisma.grantExecutionLock.findMany({
+      where: {
+        shop,
+        sourceType: "order_paid",
+        status: {
+          in: ["failed", "unknown", "retrying"],
+        },
+      },
+      orderBy: { updatedAt: "desc" },
       take: 5,
     }),
   ]);
@@ -1254,7 +1606,6 @@ export async function getShopDashboardSummary({
   const currentMonthLogs = manualGrantLogs.filter(
     (log) => getMonthKeyInTimezone(log.createdAt, shopTimezone) === currentMonthKey,
   );
-
   return {
     shopCurrency,
     shopTimezone,
@@ -1273,6 +1624,7 @@ export async function getShopDashboardSummary({
       currentMonthManualGrantCount: currentMonthLogs.length,
       currentMonthManualGrantCustomerCount: currentMonthCustomerIds.size,
       recentIdempotencyLockCount: recentGrantLocks.length,
+      activeGrantFailureCount: activeGrantFailureLocks.length,
     },
     currencyBreakdown: Array.from(totalsByCurrency.values()).sort((left, right) =>
       left.currencyCode.localeCompare(right.currencyCode),
@@ -1281,6 +1633,7 @@ export async function getShopDashboardSummary({
       .slice(0, 5)
       .map(serializeManualGrantLog),
     recentGrantLocks: recentGrantLocks.map(serializeGrantExecutionLock),
+    activeGrantFailures: activeGrantFailureLocks.map(serializeGrantExecutionLock),
   };
 }
 
