@@ -3,6 +3,7 @@ import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
 import { previewProcessedOrderUsageCharge } from "../lib/billing.server";
 import {
   getConfiguredGrantCurrencyCode,
+  getShopOperationalStatus,
   getShopSettings,
   simulateOrderPaidGrantExecution,
 } from "../lib/store-credit.server";
@@ -79,10 +80,14 @@ function buildFlowMutationInputs({
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { admin, session } = await authenticate.admin(request);
-  const { shopCurrency, grantCurrencyCode } = await getConfiguredGrantCurrencyCode({
-    admin,
-    shop: session.shop,
-  });
+  const [currencyConfig, shopStatus] = await Promise.all([
+    getConfiguredGrantCurrencyCode({
+      admin,
+      shop: session.shop,
+    }),
+    getShopOperationalStatus(admin),
+  ]);
+  const { shopCurrency, grantCurrencyCode } = currencyConfig;
   const settings = await getShopSettings({
     shop: session.shop,
     fallbackGrantCurrencyCode: shopCurrency,
@@ -90,6 +95,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 
   return {
     shopCurrency,
+    shopStatus,
     grantCurrencyCode: shopCurrency,
     manualGrantCurrencyCode: grantCurrencyCode,
     autoGrantEnabled: settings.autoGrantEnabled,
@@ -108,6 +114,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 
 export const action = async ({ request }: ActionFunctionArgs) => {
   const { admin, billing, session } = await authenticate.admin(request);
+  const shopStatus = await getShopOperationalStatus(admin);
   const formData = await request.formData();
   const values: SimulationFormValues = {
     orderId: String(formData.get("orderId") ?? "").trim(),
@@ -135,6 +142,30 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       errors,
       values,
       simulation: null,
+    };
+  }
+
+  if (!shopStatus.singleCurrencySupported) {
+    return {
+      ok: false,
+      errors: {
+        form: `このストアは ${shopStatus.enabledPresentmentCurrencies.join(", ")} の複数通貨運用のため、Flow 自動付与を開始できません。`,
+      },
+      values,
+      simulation: null,
+      billingPreview: null,
+    };
+  }
+
+  if (!shopStatus.flowAppInstalled) {
+    return {
+      ok: false,
+      errors: {
+        form: "Shopify Flow が未利用または未有効のため、自動付与シミュレーションを開始できません。",
+      },
+      values,
+      simulation: null,
+      billingPreview: null,
     };
   }
 
@@ -178,6 +209,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 export default function FlowSetupPage() {
   const {
     shopCurrency,
+    shopStatus,
     grantCurrencyCode,
     manualGrantCurrencyCode,
     autoGrantEnabled,
@@ -194,6 +226,9 @@ export default function FlowSetupPage() {
   const simulation = actionData?.simulation;
   const billingPreview = actionData?.billingPreview;
   const isSubmitting = navigation.state === "submitting";
+  const flowGuardActive = !shopStatus.flowAppInstalled;
+  const multiCurrencyBlocked = !shopStatus.singleCurrencySupported;
+  const autoGrantBlocked = flowGuardActive || multiCurrencyBlocked;
   const simulationStatusLabel =
     simulation?.status === "simulated"
       ? "lock を作成して simulated として記録しました。"
@@ -236,22 +271,46 @@ export default function FlowSetupPage() {
             <span className="rnk-pill" data-tone="neutral">
               有効期限: {defaultExpiryDays} 日
             </span>
+            <span
+              className="rnk-pill"
+              data-tone={autoGrantBlocked ? "warning" : "success"}
+            >
+              導入状態:{" "}
+              {multiCurrencyBlocked
+                ? "多通貨のため停止"
+                : flowGuardActive
+                  ? "Flow 未設定"
+                  : "利用可能"}
+            </span>
           </div>
         </section>
 
-        <p className="rnk-note">
-          現在の最小構成では、Flow は app DB を直接読めません。そのため、この画面は
-          「いま保存されている設定値でそのまま使える Flow テンプレート」を出します。
-          自動付与通貨は常にショップ通貨へ固定し、付与率や期限を変えた後はこの画面を開き直して
-          workflow 側も更新してください。
-        </p>
+        {multiCurrencyBlocked ? (
+          <p className="rnk-note">
+            このストアは {shopStatus.enabledPresentmentCurrencies.join(", ")} の複数通貨運用です。
+            BridgePoint v1 の Flow 自動付与セットアップは停止し、単一通貨化または v2 待ちを案内します。
+          </p>
+        ) : flowGuardActive ? (
+          <p className="rnk-note">
+            Shopify Flow が未利用または未有効です。自動付与 UI は無効化し、手動付与のみ継続利用できます。
+            Flow を有効化した後に、この画面へ戻ってテンプレートを適用してください。
+          </p>
+        ) : (
+          <p className="rnk-note">
+            現在の最小構成では、Flow は app DB を直接読めません。そのため、この画面は
+            「いま保存されている設定値でそのまま使える Flow テンプレート」を出します。
+            自動付与通貨は常にショップ通貨へ固定し、付与率や期限を変えた後はこの画面を開き直して
+            workflow 側も更新してください。
+          </p>
+        )}
 
         <section className="rnk-split">
           <article className="rnk-card">
             <h2>Order paid シミュレーション</h2>
             <p className="rnk-muted">
-              このストアでは Shopify Flow を使えないため、まずは app 側で
-              「付与額の計算」と「二重付与防止 lock」の動きを確認できます。
+              {autoGrantBlocked
+                ? "現在は自動付与のセットアップ条件を満たしていないため、シミュレーションも停止しています。"
+                : "Flow テンプレートと同じ前提で、付与額の計算と二重付与防止 lock の動きを確認できます。"}
             </p>
 
             {simulationErrors.form ? <p className="rnk-note">{simulationErrors.form}</p> : null}
@@ -291,8 +350,12 @@ export default function FlowSetupPage() {
               </label>
 
               <div className="rnk-actions" style={{ marginTop: 16 }}>
-                <button className="rnk-button" disabled={isSubmitting} type="submit">
-                  {isSubmitting ? "シミュレーション中..." : "シミュレーションする"}
+                <button className="rnk-button" disabled={isSubmitting || autoGrantBlocked} type="submit">
+                  {autoGrantBlocked
+                    ? "Flow 条件を満たすと利用可能"
+                    : isSubmitting
+                      ? "シミュレーション中..."
+                      : "シミュレーションする"}
                 </button>
               </div>
             </Form>
@@ -430,6 +493,9 @@ export default function FlowSetupPage() {
         <div className="rnk-actions">
           <Link className="rnk-button" to="/app/settings">
             設定を開く
+          </Link>
+          <Link className="rnk-button-secondary" to="/app/about">
+            About を見る
           </Link>
           <Link className="rnk-button-secondary" to="/app/manual-credit">
             手動付与へ戻る

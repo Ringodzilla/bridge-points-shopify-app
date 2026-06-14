@@ -8,6 +8,7 @@ import { getBridgePointsBillingGate } from "../lib/billing.server";
 import { authenticate } from "../shopify.server";
 
 const BILLING_OPEN_PATHS = new Set([
+  "/app/about",
   "/app/billing",
   "/app/release-readiness",
 ]);
@@ -54,6 +55,7 @@ export default function App() {
         <a href="/app/manual-credit">手動付与</a>
         <a href="/app/settings">設定</a>
         <a href="/app/flow-setup">Flow 自動付与</a>
+        <a href="/app/about">About</a>
         <a href="/app/billing">プラン</a>
         <a href="/app/release-readiness">公開準備</a>
       </NavMenu>

@@ -29,6 +29,20 @@ type ShopContext = {
   shopTimezone: string;
 };
 
+type ShopCustomerAccountsSetting = "DISABLED" | "OPTIONAL" | "REQUIRED";
+
+type ShopOperationalStatus = {
+  shopCurrency: string;
+  shopTimezone: string;
+  enabledPresentmentCurrencies: string[];
+  multiCurrencyEnabled: boolean;
+  singleCurrencySupported: boolean;
+  customerAccountsSetting: ShopCustomerAccountsSetting;
+  newCustomerAccountsEnabled: boolean;
+  flowAppInstalled: boolean;
+  flowAppTitle: string | null;
+};
+
 type CustomerMatch = {
   id: string;
   displayName: string | null;
@@ -94,7 +108,12 @@ type StoreCreditAccountSummary = {
   id: string;
   balance: Money;
   recentTransactions: {
+    pageInfo: {
+      hasNextPage: boolean;
+      endCursor: string | null;
+    };
     edges: Array<{
+      cursor: string;
       node: SummaryTransactionNode;
     }>;
   };
@@ -139,6 +158,8 @@ const ORDER_PAID_LOCK_RETENTION_DAYS = 400;
 const ORDER_PAID_LOCK_PREFIX = "order_paid";
 const ORDER_PAID_RETRY_WINDOW_DAYS = 30;
 const ORDER_PAID_AUTO_RETRY_INTERVAL_HOURS = 24;
+const CUSTOMER_RECENT_HISTORY_PAGE_SIZE = 20;
+const CUSTOMER_RECENT_HISTORY_RETENTION_DAYS = 365;
 
 type GrantFailureCategory = "TEMPORARY" | "PERMANENT" | "UNKNOWN";
 
@@ -758,6 +779,61 @@ export async function getShopContext(admin: AdminGraphqlClient): Promise<ShopCon
   return {
     shopCurrency: json.data?.shop?.currencyCode ?? "JPY",
     shopTimezone: json.data?.shop?.ianaTimezone ?? "UTC",
+  };
+}
+
+export async function getShopOperationalStatus(
+  admin: AdminGraphqlClient,
+): Promise<ShopOperationalStatus> {
+  const response = await admin.graphql(
+    `#graphql
+      query BridgePointsShopOperationalStatus {
+        shop {
+          currencyCode
+          ianaTimezone
+          enabledPresentmentCurrencies
+          customerAccounts
+        }
+        appByHandle(handle: "shopify-flow") {
+          title
+          installation {
+            id
+          }
+        }
+      }
+    `,
+  );
+  const json = await response.json();
+  const shop = json.data?.shop ?? {};
+  const shopCurrency = normalizeCurrencyCode(shop.currencyCode) || "JPY";
+  const enabledPresentmentCurrencies = Array.isArray(shop.enabledPresentmentCurrencies)
+    ? Array.from(
+        new Set(
+          (shop.enabledPresentmentCurrencies as Array<string | null | undefined>)
+            .map((currencyCode) =>
+              normalizeCurrencyCode(currencyCode),
+            )
+            .filter((currencyCode) => isValidCurrencyCode(currencyCode)),
+        ),
+      )
+    : [shopCurrency];
+  const customerAccountsSetting = (shop.customerAccounts ??
+    "DISABLED") as ShopCustomerAccountsSetting;
+  const flowApp = json.data?.appByHandle ?? null;
+  const singleCurrencySupported =
+    enabledPresentmentCurrencies.length === 1 &&
+    enabledPresentmentCurrencies[0] === shopCurrency;
+
+  return {
+    shopCurrency,
+    shopTimezone: shop.ianaTimezone ?? "UTC",
+    enabledPresentmentCurrencies,
+    multiCurrencyEnabled: enabledPresentmentCurrencies.length > 1,
+    singleCurrencySupported,
+    customerAccountsSetting,
+    newCustomerAccountsEnabled: customerAccountsSetting !== "DISABLED",
+    flowAppInstalled: Boolean(flowApp?.installation?.id),
+    flowAppTitle: flowApp?.title ?? null,
   };
 }
 
@@ -1641,20 +1717,27 @@ export async function getCustomerStoreCreditSummary({
   admin,
   shop,
   customerId,
+  transactionCursor,
 }: {
   admin: AdminGraphqlClient;
   shop: string;
   customerId: string;
+  transactionCursor?: string | null;
 }) {
   const { shopCurrency, grantCurrencyCode, settings } = await getConfiguredGrantCurrencyCode({
     admin,
     shop,
   });
+  const operationalStatus = await getShopOperationalStatus(admin);
+  const retentionThreshold = new Date();
+  retentionThreshold.setUTCDate(
+    retentionThreshold.getUTCDate() - CUSTOMER_RECENT_HISTORY_RETENTION_DAYS,
+  );
 
   const [response, recentManualGrants] = await Promise.all([
     admin.graphql(
       `#graphql
-        query BridgePointsCustomerStoreCreditSummary($id: ID!) {
+        query BridgePointsCustomerStoreCreditSummary($id: ID!, $transactionsFirst: Int!, $transactionsAfter: String) {
           customer(id: $id) {
             id
             displayName
@@ -1669,8 +1752,13 @@ export async function getCustomerStoreCreditSummary({
                     amount
                     currencyCode
                   }
-                  recentTransactions: transactions(first: 10, sortKey: CREATED_AT, reverse: true) {
+                  recentTransactions: transactions(first: $transactionsFirst, after: $transactionsAfter, sortKey: CREATED_AT, reverse: true) {
+                    pageInfo {
+                      hasNextPage
+                      endCursor
+                    }
                     edges {
+                      cursor
                       node {
                         __typename
                         amount {
@@ -1731,6 +1819,8 @@ export async function getCustomerStoreCreditSummary({
       {
         variables: {
           id: customerId,
+          transactionsFirst: CUSTOMER_RECENT_HISTORY_PAGE_SIZE,
+          transactionsAfter: transactionCursor ?? null,
         },
       },
     ),
@@ -1763,7 +1853,17 @@ export async function getCustomerStoreCreditSummary({
       account: null,
       nextExpiration: null,
       recentTransactions: [],
+      recentTransactionsPageInfo: {
+        hasNextPage: false,
+        nextCursor: null,
+      },
+      recentHistoryPolicy: {
+        pageSize: CUSTOMER_RECENT_HISTORY_PAGE_SIZE,
+        retentionDays: CUSTOMER_RECENT_HISTORY_RETENTION_DAYS,
+        sort: "createdAt_desc",
+      },
       recentManualGrants: recentManualGrants.map(serializeManualGrantLog),
+      shopStatus: operationalStatus,
     };
   }
 
@@ -1798,6 +1898,32 @@ export async function getCustomerStoreCreditSummary({
   const expiringBalance = expiringCredits.reduce((total, transaction) => {
     return total + parseMoneyAmount(transaction.remainingAmount?.amount);
   }, 0);
+  const transactionEdges = account?.recentTransactions.edges ?? [];
+  const filteredTransactions = transactionEdges
+    .filter(({ node }) => new Date(node.createdAt).getTime() >= retentionThreshold.getTime())
+    .map(({ node }) => ({
+      id:
+        "id" in node && node.id
+          ? node.id
+          : `${node.__typename}-${node.createdAt}`,
+      type: mapTransactionType(node.__typename),
+      createdAt: node.createdAt,
+      amount: node.amount,
+      balanceAfterTransaction: node.balanceAfterTransaction,
+      expiresAt:
+        node.__typename === "StoreCreditAccountCreditTransaction" ? node.expiresAt : null,
+      remainingAmount:
+        node.__typename === "StoreCreditAccountCreditTransaction"
+          ? node.remainingAmount
+          : null,
+    }));
+  const reachedRetentionBoundary =
+    transactionEdges.length > 0 &&
+    new Date(transactionEdges[transactionEdges.length - 1]?.node.createdAt ?? 0).getTime() <
+      retentionThreshold.getTime();
+  const nextCursor = reachedRetentionBoundary
+    ? null
+    : account?.recentTransactions.pageInfo.endCursor ?? null;
 
   return {
     shopCurrency,
@@ -1824,23 +1950,18 @@ export async function getCustomerStoreCreditSummary({
           remainingAmount: nextExpiration.remainingAmount,
         }
       : null,
-    recentTransactions: (account?.recentTransactions.edges ?? []).map(({ node }) => ({
-      id:
-        "id" in node && node.id
-          ? node.id
-          : `${node.__typename}-${node.createdAt}`,
-      type: mapTransactionType(node.__typename),
-      createdAt: node.createdAt,
-      amount: node.amount,
-      balanceAfterTransaction: node.balanceAfterTransaction,
-      expiresAt:
-        node.__typename === "StoreCreditAccountCreditTransaction" ? node.expiresAt : null,
-      remainingAmount:
-        node.__typename === "StoreCreditAccountCreditTransaction"
-          ? node.remainingAmount
-          : null,
-    })),
+    recentTransactions: filteredTransactions,
+    recentTransactionsPageInfo: {
+      hasNextPage: Boolean(account?.recentTransactions.pageInfo.hasNextPage) && Boolean(nextCursor),
+      nextCursor,
+    },
+    recentHistoryPolicy: {
+      pageSize: CUSTOMER_RECENT_HISTORY_PAGE_SIZE,
+      retentionDays: CUSTOMER_RECENT_HISTORY_RETENTION_DAYS,
+      sort: "createdAt_desc",
+    },
     recentManualGrants: recentManualGrants.map(serializeManualGrantLog),
+    shopStatus: operationalStatus,
   };
 }
 

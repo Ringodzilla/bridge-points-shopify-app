@@ -6,6 +6,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { admin, session, cors } = await authenticate.admin(request);
   const url = new URL(request.url);
   const customerId = url.searchParams.get("customerId");
+  const cursor = url.searchParams.get("cursor");
 
   if (!customerId) {
     return cors(
@@ -23,6 +24,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       admin,
       shop: session.shop,
       customerId,
+      transactionCursor: cursor,
     });
 
     return cors(Response.json(summary));

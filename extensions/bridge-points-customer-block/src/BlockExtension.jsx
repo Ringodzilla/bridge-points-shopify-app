@@ -1,6 +1,6 @@
 import "@shopify/ui-extensions/preact";
 import { render } from "preact";
-import { useEffect, useState } from "preact/hooks";
+import { useEffect, useMemo, useState } from "preact/hooks";
 
 export default async () => {
   render(<Extension />, document.body);
@@ -45,9 +45,16 @@ function formatTransactionType(type) {
   }
 }
 
-async function fetchCustomerSummary(customerId) {
+async function fetchCustomerSummary(customerId, cursor) {
+  const searchParams = new URLSearchParams({
+    customerId,
+  });
+  if (cursor) {
+    searchParams.set("cursor", cursor);
+  }
+
   const response = await fetch(
-    `/api/customer-details/store-credit-summary?customerId=${encodeURIComponent(customerId)}`,
+    `/api/customer-details/store-credit-summary?${searchParams.toString()}`,
     {},
   );
   let json = null;
@@ -79,8 +86,14 @@ function toReadableError(error, fallbackMessage) {
 function Extension() {
   const customerId = shopify.data.selected?.[0]?.id ?? null;
   const [loading, setLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
   const [error, setError] = useState("");
   const [summary, setSummary] = useState(null);
+  const [transactions, setTransactions] = useState([]);
+  const [pageInfo, setPageInfo] = useState({
+    hasNextPage: false,
+    nextCursor: null,
+  });
 
   useEffect(() => {
     let mounted = true;
@@ -104,12 +117,16 @@ function Extension() {
         }
 
         setSummary(nextSummary);
+        setTransactions(nextSummary.recentTransactions ?? []);
+        setPageInfo(nextSummary.recentTransactionsPageInfo ?? { hasNextPage: false, nextCursor: null });
       } catch (fetchError) {
         if (!mounted) {
           return;
         }
 
         setSummary(null);
+        setTransactions([]);
+        setPageInfo({ hasNextPage: false, nextCursor: null });
         setError(toReadableError(fetchError, "顧客の Store Credit 情報を取得できませんでした。"));
       } finally {
         if (mounted) {
@@ -131,6 +148,28 @@ function Extension() {
   const manualCreditHref = summary?.customer?.email
     ? `/app/manual-credit?customerEmail=${encodeURIComponent(summary.customer.email)}`
     : "/app/manual-credit";
+  const historyPolicy = summary?.recentHistoryPolicy;
+  const shopStatus = summary?.shopStatus;
+  const historyLines = useMemo(() => transactions ?? [], [transactions]);
+
+  async function handleLoadMore() {
+    if (!customerId || !pageInfo.nextCursor) {
+      return;
+    }
+
+    try {
+      setLoadingMore(true);
+      setError("");
+      const nextSummary = await fetchCustomerSummary(customerId, pageInfo.nextCursor);
+      setSummary((current) => current ?? nextSummary);
+      setTransactions((current) => [...current, ...(nextSummary.recentTransactions ?? [])]);
+      setPageInfo(nextSummary.recentTransactionsPageInfo ?? { hasNextPage: false, nextCursor: null });
+    } catch (fetchError) {
+      setError(toReadableError(fetchError, "追加の履歴を取得できませんでした。"));
+    } finally {
+      setLoadingMore(false);
+    }
+  }
 
   return (
     <s-admin-block heading="BridgePoint">
@@ -173,13 +212,28 @@ function Extension() {
             <s-text>
               手動付与の既定期限: {summary.settings?.manualDefaultExpiryDays ?? "365"} 日
             </s-text>
+            <s-text>
+              直近履歴: {historyPolicy?.pageSize ?? 20} 件ずつ / {historyPolicy?.retentionDays ?? 365} 日以内 / 新しい順
+            </s-text>
+            {!shopStatus?.newCustomerAccountsEnabled ? (
+              <s-banner id="bridge-points-block-checkout-note" tone="warning">
+                このストアでは New customer accounts が未有効です。BridgePoint で「貯める・管理する」は使えますが、
+                checkout での Store Credit 利用は有効化後に利用できます。
+              </s-banner>
+            ) : null}
 
-            {summary.recentTransactions.slice(0, 3).map((transaction) => (
+            {historyLines.map((transaction) => (
               <s-text key={transaction.id}>
                 {formatDate(transaction.createdAt)} / {formatTransactionType(transaction.type)} /{" "}
                 {formatMoney(transaction.amount)}
               </s-text>
             ))}
+
+            {pageInfo.hasNextPage ? (
+              <s-button onClick={handleLoadMore}>
+                {loadingMore ? "履歴を読み込み中..." : "さらに 20 件を読み込む"}
+              </s-button>
+            ) : null}
 
             <s-button href={manualCreditHref}>手動付与ページを開く</s-button>
             <s-text>

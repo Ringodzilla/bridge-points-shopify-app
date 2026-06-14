@@ -2,6 +2,7 @@ import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
 import { Form, Link, useActionData, useLoaderData } from "react-router";
 import {
   getShopDashboardSummary,
+  getShopOperationalStatus,
   retryFailedOrderPaidGrant,
 } from "../lib/store-credit.server";
 import { authenticate } from "../shopify.server";
@@ -31,10 +32,18 @@ function formatDate(value: string | null, timeZone?: string) {
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { admin, session } = await authenticate.admin(request);
-  return getShopDashboardSummary({
-    admin,
-    shop: session.shop,
-  });
+  const [summary, shopStatus] = await Promise.all([
+    getShopDashboardSummary({
+      admin,
+      shop: session.shop,
+    }),
+    getShopOperationalStatus(admin),
+  ]);
+
+  return {
+    ...summary,
+    shopStatus,
+  };
 };
 
 export const action = async ({ request }: ActionFunctionArgs) => {
@@ -94,8 +103,11 @@ export default function Index() {
     recentManualGrants,
     recentGrantLocks,
     activeGrantFailures,
+    shopStatus,
   } = useLoaderData<typeof loader>();
   const actionData = useActionData<typeof action>();
+  const setupBlockedByMultiCurrency = !shopStatus.singleCurrencySupported;
+  const flowGuardActive = !shopStatus.flowAppInstalled;
 
   return (
     <s-page heading="BridgePoint">
@@ -123,8 +135,37 @@ export default function Index() {
             <Link className="rnk-button-secondary" to="/app/release-readiness">
               公開準備を見る
             </Link>
+            <Link className="rnk-button-secondary" to="/app/about">
+              About を見る
+            </Link>
           </div>
         </section>
+
+        {(setupBlockedByMultiCurrency || flowGuardActive || !shopStatus.newCustomerAccountsEnabled) ? (
+          <section className="rnk-card">
+            <h2>導入診断</h2>
+            <ul className="rnk-list">
+              <li>
+                通貨:{" "}
+                {setupBlockedByMultiCurrency
+                  ? `v1 対象外（有効通貨: ${shopStatus.enabledPresentmentCurrencies.join(", ")}）`
+                  : `単一通貨で利用可能 (${shopStatus.shopCurrency})`}
+              </li>
+              <li>
+                Shopify Flow:{" "}
+                {flowGuardActive
+                  ? "未利用または未有効。自動付与 UI はロックし、手動付与のみ継続利用できます。"
+                  : "利用可能"}
+              </li>
+              <li>
+                New customer accounts:{" "}
+                {shopStatus.newCustomerAccountsEnabled
+                  ? "有効。checkout 利用条件を満たす方向です。"
+                  : "未有効。v1 でも「貯める・管理する」は利用できますが、checkout 利用は有効化後です。"}
+              </li>
+            </ul>
+          </section>
+        ) : null}
 
         <section className="rnk-grid">
           <article className="rnk-card">

@@ -217,6 +217,13 @@ const globalStyles = `
     transform: translateY(-1px);
   }
 
+  .rnk-button:disabled,
+  .rnk-button-secondary:disabled {
+    opacity: 0.55;
+    cursor: not-allowed;
+    transform: none;
+  }
+
   .rnk-split {
     display: grid;
     gap: 16px;
